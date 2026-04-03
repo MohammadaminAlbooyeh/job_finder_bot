@@ -1,0 +1,12 @@
+# Example rules for job filtering
+include_keywords:
+  - senior
+  - lead
+
+exclude_keywords:
+  - internship
+  - junior
+
+location_whitelist:
+  - remote
+  - ny
