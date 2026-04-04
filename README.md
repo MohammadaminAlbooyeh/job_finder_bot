@@ -46,3 +46,25 @@ Run tests with `pytest`:
 pip install -r requirements.txt
 pytest -q
 ```
+
+Virtual environment (recommended)
+--------------------------------
+
+Always use a per-repo virtual environment to avoid interfering with system packages.
+
+Quick setup (recommended):
+
+```bash
+# create + install
+python3 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+Shortcuts provided in this repo:
+- `scripts/setup_venv.sh` — creates `.venv` and installs `requirements.txt`.
+- `make venv` — same as above (requires `make`).
+
+VS Code: the workspace is configured to use `.venv` if present (see `.vscode/settings.json`).
+

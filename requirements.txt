@@ -3,3 +3,6 @@ beautifulsoup4
 pytest
 pyyaml
 streamlit
+selenium
+webdriver-manager
+undetected-chromedriver
