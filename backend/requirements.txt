@@ -1,0 +1,14 @@
+requests
+beautifulsoup4
+pytest
+pyyaml
+selenium
+webdriver-manager
+undetected-chromedriver
+fastapi
+uvicorn[standard]
+selenium
+webdriver-manager
+undetected-chromedriver
+fastapi
+uvicorn[standard]
