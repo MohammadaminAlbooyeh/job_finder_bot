@@ -3,11 +3,65 @@
 <script setup>
 import { ref } from 'vue'
 
+
 const searchTitle = ref('')
 const searchLocation = ref('')
+const selectedLocations = ref([])
 const jobs = ref([])
 const loading = ref(false)
 const error = ref('')
+
+// Demo city and job title lists, can be replaced with API
+const cityList = [
+  'Milan', 'Turin', 'Rome', 'Naples', 'Florence', 'Venice', 'Bologna', 'Genoa', 'Palermo', 'Bari', 'Catania', 'Verona', 'Padua', 'Trieste', 'Brescia', 'Parma', 'Prato', 'Modena', 'Reggio Calabria', 'Reggio Emilia', 'Perugia', 'Livorno', 'Ravenna', 'Cagliari', 'Foggia', 'Rimini', 'Salerno', 'Ferrara', 'Sassari', 'Latina', 'Giugliano in Campania', 'Monza', 'Siracusa', 'Pescara', 'Bergamo', 'Forlì', 'Trento', 'Vicenza', 'Terni', 'Bolzano', 'Novara', 'Piacenza', 'Ancona', 'Andria', 'Udine', 'Arezzo', 'Cesena', 'Lecce', 'Barletta', 'Alessandria', 'La Spezia'
+]
+const jobTitleList = [
+  'Frontend Developer', 'Backend Developer', 'Full Stack Developer', 'Data Scientist', 'Machine Learning Engineer', 'DevOps Engineer', 'QA Engineer', 'Product Manager', 'UI/UX Designer', 'Mobile Developer', 'Project Manager', 'Business Analyst', 'System Administrator', 'Cloud Engineer', 'Security Engineer', 'Database Administrator', 'Network Engineer', 'Scrum Master', 'Software Architect', 'Web Developer', 'React Developer', 'Vue Developer', 'Angular Developer', 'Python Developer', 'Java Developer', 'C# Developer', 'PHP Developer', 'Ruby Developer', 'Go Developer', 'iOS Developer', 'Android Developer', 'Flutter Developer', 'Node.js Developer', 'TypeScript Developer', 'Scala Developer', 'Rust Developer', 'Game Developer', 'Embedded Engineer', 'Support Engineer', 'Technical Writer', 'IT Consultant', 'AI Engineer', 'Research Scientist', 'Solutions Architect', 'Test Automation Engineer', 'Release Manager', 'Site Reliability Engineer', 'Hardware Engineer', 'SAP Consultant', 'ERP Specialist', 'Help Desk Specialist'
+]
+const citySuggestions = ref([])
+const showCitySuggestions = ref(false)
+const jobTitleSuggestions = ref([])
+const showJobTitleSuggestions = ref(false)
+
+function updateCitySuggestions() {
+  const val = searchLocation.value.trim().toLowerCase()
+  if (!val) {
+    citySuggestions.value = []
+    showCitySuggestions.value = false
+    return
+  }
+  // Exclude already selected locations
+  citySuggestions.value = cityList.filter(city => city.toLowerCase().startsWith(val) && !selectedLocations.value.includes(city)).slice(0, 6)
+  showCitySuggestions.value = citySuggestions.value.length > 0
+}
+
+function selectCitySuggestion(city) {
+  if (!selectedLocations.value.includes(city)) {
+    selectedLocations.value.push(city)
+  }
+  searchLocation.value = ''
+  showCitySuggestions.value = false
+}
+
+function removeLocation(city) {
+  selectedLocations.value = selectedLocations.value.filter(l => l !== city)
+}
+
+function updateJobTitleSuggestions() {
+  const val = searchTitle.value.trim().toLowerCase()
+  if (!val) {
+    jobTitleSuggestions.value = []
+    showJobTitleSuggestions.value = false
+    return
+  }
+  jobTitleSuggestions.value = jobTitleList.filter(title => title.toLowerCase().startsWith(val)).slice(0, 6)
+  showJobTitleSuggestions.value = jobTitleSuggestions.value.length > 0
+}
+
+function selectJobTitleSuggestion(title) {
+  searchTitle.value = title
+  showJobTitleSuggestions.value = false
+}
 
 function searchJobs() {
   loading.value = true
@@ -39,7 +93,7 @@ function saveJob(job) {
   <div id="app">
     <!-- Header -->
     <header class="header">
-      <img src="/logo.svg" alt="Logo" class="logo" />
+      <div class="app-title">Find Your Dream Job</div>
       <div class="header-actions">
         <button class="login-btn">Login / Register</button>
         <button class="post-job-btn">Post Job</button>
@@ -52,12 +106,20 @@ function saveJob(job) {
       <aside class="sidebar">
         <h3>Filters</h3>
         <div class="filter-group">
+          <label>Work Arrangement</label>
+          <select>
+            <option>All</option>
+            <option>Remote</option>
+            <option>In-person</option>
+            <option>Hybrid</option>
+          </select>
+        </div>
+        <div class="filter-group">
           <label>Job Type</label>
           <select>
             <option>All</option>
             <option>Full-time</option>
             <option>Part-time</option>
-            <option>Remote</option>
             <option>Internship</option>
           </select>
         </div>
@@ -90,19 +152,53 @@ function saveJob(job) {
         <!-- Search Box -->
 
         <section class="search-box">
-          <input
-            v-model="searchTitle"
-            type="text"
-            placeholder="Job title or keyword"
-            @keyup.enter="searchJobs"
-          />
-          <input
-            v-model="searchLocation"
-            type="text"
-            placeholder="Location"
-            @keyup.enter="searchJobs"
-          />
-          <button @click="searchJobs" :disabled="loading">Search</button>
+          <div class="search-row">
+            <div style="position:relative; flex:1;">
+              <input
+                v-model="searchTitle"
+                type="text"
+                placeholder="Job title or keyword"
+                @keyup.enter="searchJobs"
+                @input="updateJobTitleSuggestions"
+                @focus="updateJobTitleSuggestions"
+                @blur="setTimeout(() => showJobTitleSuggestions = false, 120)"
+                autocomplete="off"
+                style="width:100%"
+              />
+              <ul v-if="showJobTitleSuggestions" class="city-suggestions">
+                <li v-for="title in jobTitleSuggestions" :key="title" @mousedown.prevent="selectJobTitleSuggestion(title)">
+                  {{ title }}
+                </li>
+              </ul>
+            </div>
+            <div style="position:relative; flex:1; margin-left:1rem;">
+              <input
+                v-model="searchLocation"
+                type="text"
+                placeholder="Add location"
+                @keyup.enter="() => { if (citySuggestions.length > 0) selectCitySuggestion(citySuggestions[0]) }"
+                @input="updateCitySuggestions"
+                @focus="updateCitySuggestions"
+                @blur="setTimeout(() => showCitySuggestions = false, 120)"
+                autocomplete="off"
+                style="width:100%"
+              />
+              <ul v-if="showCitySuggestions" class="city-suggestions">
+                <li v-for="city in citySuggestions" :key="city" @mousedown.prevent="selectCitySuggestion(city)">
+                  {{ city }}
+                </li>
+              </ul>
+            </div>
+            <button @click="searchJobs" :disabled="loading" style="margin-left:1rem;">Search</button>
+          </div>
+          <div class="selected-locations-row">
+            <div class="selected-locations">
+              <span v-for="city in selectedLocations" :key="city" class="location-tag">
+                {{ city }}
+                <button class="remove-tag" @click.prevent="removeLocation(city)">&times;</button>
+              </span>
+            </div>
+          </div>
         </section>
 
         <!-- Job List -->
@@ -146,8 +242,61 @@ function saveJob(job) {
     </div>
   </div>
 </template>
+# ...existing styles...
 <style scoped>
+.selected-locations {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 0.2rem;
+}
+.location-tag {
+  background: #e6f4f1;
+  color: #222;
+  border-radius: 12px;
+  padding: 0.2rem 0.7rem 0.2rem 0.7rem;
+  font-size: 0.97em;
+  display: flex;
+  align-items: center;
+}
+.remove-tag {
+  background: none;
+  border: none;
+  color: #888;
+  font-size: 1.1em;
+  margin-left: 0.3em;
+  cursor: pointer;
+  padding: 0;
+}
+.remove-tag:hover {
+  color: #d00;
+}
+/* ...existing styles... */
 #app {
+  /* City autocomplete styles */
+  .city-suggestions {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 100%;
+    z-index: 10;
+    background: #fff;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.13);
+    border-radius: 0 0 8px 8px;
+    margin: 0;
+    padding: 0.2rem 0;
+    list-style: none;
+    max-height: 180px;
+    overflow-y: auto;
+  }
+  .city-suggestions li {
+    padding: 0.5rem 1rem;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  .city-suggestions li:hover {
+    background: #f2f2f2;
+  }
   font-family: 'Segoe UI', Arial, sans-serif;
   background: #f8f9fa;
   min-height: 100vh;
@@ -160,9 +309,12 @@ function saveJob(job) {
   background: #fff;
   border-bottom: 1px solid #eee;
 }
-.logo {
-  width: 48px;
-  height: 48px;
+.app-title {
+  font-size: 1.7rem;
+  font-weight: 700;
+  color: #35495e;
+  letter-spacing: 0.5px;
+  padding: 0.2rem 0.5rem;
 }
 .header-actions button {
   margin-left: 1rem;
@@ -206,17 +358,18 @@ function saveJob(job) {
   flex: 1;
 }
 .search-box {
-  display: flex;
-  gap: 1rem;
   margin-bottom: 2rem;
 }
-.search-box input {
-  flex: 1;
+.search-row {
+  display: flex;
+  gap: 1rem;
+}
+.search-row input {
   padding: 0.6rem;
   border-radius: 4px;
   border: 1px solid #ddd;
 }
-.search-box button {
+.search-row button {
   padding: 0.6rem 1.5rem;
   border-radius: 4px;
   border: none;
@@ -224,6 +377,11 @@ function saveJob(job) {
   color: #fff;
   font-weight: 600;
   cursor: pointer;
+  height: 42px;
+  align-self: center;
+}
+.selected-locations-row {
+  margin-top: 0.3rem;
 }
 .job-list {
   margin-bottom: 2rem;
