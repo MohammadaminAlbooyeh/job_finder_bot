@@ -67,7 +67,11 @@ function searchJobs() {
   loading.value = true
   error.value = ''
   jobs.value = []
-  fetch(`http://127.0.0.1:8000/run?query=${encodeURIComponent(searchTitle.value)}&location=${encodeURIComponent(searchLocation.value)}`)
+  
+  // Get API URL from environment or use default for development
+  const apiUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000'
+  
+  fetch(`${apiUrl}/run?query=${encodeURIComponent(searchTitle.value)}&location=${encodeURIComponent(searchLocation.value)}`)
     .then(async (res) => {
       if (!res.ok) throw new Error('Failed to fetch jobs')
       return await res.json()
