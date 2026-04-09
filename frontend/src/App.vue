@@ -217,11 +217,22 @@ function saveJob(job) {
               <span class="location">{{ job.location }}</span>
               <span v-if="job.salary" class="salary">{{ job.salary }}</span>
             </div>
+            <div class="job-card-desc">
+              {{ job.description ? job.description.slice(0, 120) + (job.description.length > 120 ? '...' : '') : '' }}
+            </div>
             <div class="job-card-actions">
-              <a v-if="job.url" :href="job.url" target="_blank"><button>Apply</button></a>
+              <a v-if="job.url" :href="job.url" target="_blank" rel="noopener">
+                <button>Apply</button>
+              </a>
               <button @click="saveJob(job)">Save</button>
             </div>
           </div>
+        .job-card-desc {
+          margin: 0.7rem 0 0.5rem 0;
+          color: #444;
+          font-size: 0.98em;
+          min-height: 1.2em;
+        }
         </section>
 
         <section class="job-details">
