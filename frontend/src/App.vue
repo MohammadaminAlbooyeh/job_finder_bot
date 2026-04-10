@@ -85,21 +85,39 @@ async function searchJobs() {
 
   try {
     const apiUrl = getApiBaseUrl()
-    const finalLocation = selectedLocations.value.length > 0
-      ? selectedLocations.value.join(', ')
-      : searchLocation.value.trim() || 'remote'
     const finalQuery = searchTitle.value.trim() || 'python developer'
+    const locations = selectedLocations.value.length > 0
+      ? [...selectedLocations.value]
+      : [searchLocation.value.trim() || 'remote']
 
-    const res = await fetch(
-      `${apiUrl}/run?query=${encodeURIComponent(finalQuery)}&location=${encodeURIComponent(finalLocation)}`
+    const responses = await Promise.all(
+      locations.map(async (loc) => {
+        const res = await fetch(
+          `${apiUrl}/run?query=${encodeURIComponent(finalQuery)}&location=${encodeURIComponent(loc)}`
+        )
+
+        if (!res.ok) {
+          throw new Error(`API error for ${loc}: ${res.status} ${res.statusText}`)
+        }
+
+        const data = await res.json()
+        return Array.isArray(data) ? data : (Array.isArray(data.jobs) ? data.jobs : [])
+      })
     )
 
-    if (!res.ok) {
-      throw new Error(`API error: ${res.status} ${res.statusText}`)
+    const merged = responses.flat()
+    const deduped = []
+    const seen = new Set()
+    for (const job of merged) {
+      const key = (job?.url || `${job?.title || ''}|${job?.company || ''}|${job?.location || ''}`).trim()
+      if (!key || seen.has(key)) {
+        continue
+      }
+      seen.add(key)
+      deduped.push(job)
     }
 
-    const data = await res.json()
-    jobs.value = Array.isArray(data) ? data : (Array.isArray(data.jobs) ? data.jobs : [])
+    jobs.value = deduped
   } catch (e) {
     const rawMessage = e?.message || 'Error fetching jobs'
     const normalizedMessage = rawMessage.toLowerCase()
