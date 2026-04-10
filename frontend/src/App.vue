@@ -63,28 +63,53 @@ function selectJobTitleSuggestion(title) {
   showJobTitleSuggestions.value = false
 }
 
-function searchJobs() {
+function getApiBaseUrl() {
+  const raw = (import.meta.env.VITE_API_URL || '').trim()
+
+  if (raw) {
+    return raw.replace(/\/$/, '')
+  }
+
+  if (import.meta.env.DEV) {
+    return 'http://127.0.0.1:8000'
+  }
+
+  throw new Error('Frontend is missing VITE_API_URL. Set it in Vercel env vars to your Render HTTPS URL.')
+}
+
+async function searchJobs() {
   loading.value = true
   error.value = ''
   jobs.value = []
-  
-  // Get API URL from environment or use default for development
-  const apiUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000'
-  
-  fetch(`${apiUrl}/run?query=${encodeURIComponent(searchTitle.value)}&location=${encodeURIComponent(searchLocation.value)}`)
-    .then(async (res) => {
-      if (!res.ok) throw new Error('Failed to fetch jobs')
-      return await res.json()
-    })
-    .then(data => {
-      jobs.value = Array.isArray(data) ? data : []
-    })
-    .catch(e => {
-      error.value = e.message || 'Error fetching jobs'
-    })
-    .finally(() => {
-      loading.value = false
-    })
+
+  try {
+    const apiUrl = getApiBaseUrl()
+    const finalLocation = selectedLocations.value.length > 0
+      ? selectedLocations.value.join(', ')
+      : searchLocation.value.trim() || 'remote'
+    const finalQuery = searchTitle.value.trim() || 'python developer'
+
+    const res = await fetch(
+      `${apiUrl}/run?query=${encodeURIComponent(finalQuery)}&location=${encodeURIComponent(finalLocation)}`
+    )
+
+    if (!res.ok) {
+      throw new Error(`API error: ${res.status} ${res.statusText}`)
+    }
+
+    const data = await res.json()
+    jobs.value = Array.isArray(data) ? data : (Array.isArray(data.jobs) ? data.jobs : [])
+  } catch (e) {
+    const rawMessage = e?.message || 'Error fetching jobs'
+    const normalizedMessage = rawMessage.toLowerCase()
+    if (normalizedMessage.includes('failed to fetch')) {
+      error.value = 'Cannot reach backend API. Check VITE_API_URL in Vercel and ensure Render backend is HTTPS and healthy.'
+    } else {
+      error.value = rawMessage
+    }
+  } finally {
+    loading.value = false
+  }
 }
 
 function saveJob(job) {
@@ -231,12 +256,6 @@ function saveJob(job) {
               <button @click="saveJob(job)">Save</button>
             </div>
           </div>
-        .job-card-desc {
-          margin: 0.7rem 0 0.5rem 0;
-          color: #444;
-          font-size: 0.98em;
-          min-height: 1.2em;
-        }
         </section>
 
         <section class="job-details">
@@ -419,6 +438,12 @@ function saveJob(job) {
   gap: 2rem;
   margin: 0.5rem 0 1rem 0;
   color: #666;
+}
+.job-card-desc {
+  margin: 0.7rem 0 0.5rem 0;
+  color: #444;
+  font-size: 0.98em;
+  min-height: 1.2em;
 }
 .job-card-actions button {
   margin-right: 0.7rem;
