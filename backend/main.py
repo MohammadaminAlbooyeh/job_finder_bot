@@ -24,8 +24,18 @@ app.add_middleware(
 )
 
 
+@app.get("/")
+def root():
+    return {"service": "job-finder-bot-api", "status": "ok"}
+
+
 @app.get("/health")
 def health():
+    return {"status": "ok"}
+
+
+@app.get("/healthz")
+def healthz():
     return {"status": "ok"}
 
 @app.get("/run")

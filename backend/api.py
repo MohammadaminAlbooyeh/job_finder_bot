@@ -10,6 +10,11 @@ from persistence import load_seen_urls
 app = FastAPI(title="Job Finder Bot API")
 
 
+@app.get("/")
+def root():
+    return {"service": "job-finder-bot-api", "status": "ok"}
+
+
 class ScrapeRequest(BaseModel):
     query: str = "python developer"
     location: str = "remote"
@@ -34,6 +39,11 @@ def _load_jobs(output_path: str):
 
 @app.get("/health")
 def health():
+    return {"status": "ok"}
+
+
+@app.get("/healthz")
+def healthz():
     return {"status": "ok"}
 
 
