@@ -65,6 +65,7 @@ function selectJobTitleSuggestion(title) {
 
 function getApiBaseUrl() {
   const raw = (import.meta.env.VITE_API_URL || '').trim()
+  const productionFallback = 'https://job-finder-bot-api.onrender.com'
 
   if (raw) {
     return raw.replace(/\/$/, '')
@@ -74,7 +75,7 @@ function getApiBaseUrl() {
     return 'http://127.0.0.1:8000'
   }
 
-  throw new Error('Frontend is missing VITE_API_URL. Set it in Vercel env vars to your Render HTTPS URL.')
+  return productionFallback
 }
 
 async function searchJobs() {
