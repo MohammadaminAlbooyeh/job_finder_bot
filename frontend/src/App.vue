@@ -65,7 +65,7 @@ function selectJobTitleSuggestion(title) {
 
 function getApiBaseUrl() {
   const raw = (import.meta.env.VITE_API_URL || '').trim()
-  const productionFallback = 'https://job-finder-bot-api.onrender.com'
+  const productionFallback = 'https://job-finder-bot-xhst.onrender.com'
 
   if (raw) {
     return raw.replace(/\/$/, '')
