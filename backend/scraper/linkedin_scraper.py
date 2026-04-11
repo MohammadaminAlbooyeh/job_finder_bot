@@ -141,21 +141,31 @@ def scrape_linkedin(query: str = "software engineer", location: str = "remote", 
 
     for page in range(num_pages):
         start = page * 25
-        url = (
-            "https://www.linkedin.com/jobs/search/"
+
+        # LinkedIn guest endpoint is usually more stable to scrape than the full search page.
+        api_url = (
+            "https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search"
             f"?keywords={query_encoded}&location={location_encoded}&start={start}"
         )
-        soup = _get_soup(url, proxies=proxies)
 
-        cards = soup.select("ul.jobs-search__results-list li")
+        soup = _get_soup(api_url, proxies=proxies)
+        cards = soup.select("li")
         if not cards:
-            cards = soup.select(".base-card")
+            # Fallback to the legacy search page selectors.
+            fallback_url = (
+                "https://www.linkedin.com/jobs/search/"
+                f"?keywords={query_encoded}&location={location_encoded}&start={start}"
+            )
+            soup = _get_soup(fallback_url, proxies=proxies)
+            cards = soup.select("ul.jobs-search__results-list li")
+            if not cards:
+                cards = soup.select(".base-card")
 
         for card in cards:
             title_el = card.select_one("h3.base-search-card__title") or card.select_one("h3")
             company_el = card.select_one("h4.base-search-card__subtitle") or card.select_one("h4")
             location_el = card.select_one("span.job-search-card__location") or card.select_one("span")
-            link_el = card.select_one("a.base-card__full-link") or card.select_one("a")
+            link_el = card.select_one("a.base-card__full-link") or card.select_one("a.base-card__full-link") or card.select_one("a")
 
             title = title_el.get_text(strip=True) if title_el else ""
             company = company_el.get_text(strip=True) if company_el else ""
@@ -164,6 +174,9 @@ def scrape_linkedin(query: str = "software engineer", location: str = "remote", 
 
             snippet_el = card.select_one("p.job-search-card__snippet")
             summary = snippet_el.get_text(strip=True) if snippet_el else ""
+
+            if not title and not company and not url_job:
+                continue
 
             jobs.append(
                 {

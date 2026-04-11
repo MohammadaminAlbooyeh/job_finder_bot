@@ -10,6 +10,7 @@ const selectedLocations = ref([])
 const jobs = ref([])
 const loading = ref(false)
 const error = ref('')
+const notice = ref('')
 
 // Demo city and job title lists, can be replaced with API
 const cityList = [
@@ -81,6 +82,7 @@ function getApiBaseUrl() {
 async function searchJobs() {
   loading.value = true
   error.value = ''
+  notice.value = ''
   jobs.value = []
 
   try {
@@ -115,6 +117,32 @@ async function searchJobs() {
       }
       seen.add(key)
       deduped.push(job)
+    }
+
+    if (deduped.length === 0 && !locations.some((loc) => loc.toLowerCase() === 'remote')) {
+      const fallbackRes = await fetch(
+        `${apiUrl}/run?query=${encodeURIComponent(finalQuery)}&location=${encodeURIComponent('remote')}`
+      )
+
+      if (fallbackRes.ok) {
+        const fallbackData = await fallbackRes.json()
+        const fallbackJobs = Array.isArray(fallbackData)
+          ? fallbackData
+          : (Array.isArray(fallbackData.jobs) ? fallbackData.jobs : [])
+
+        for (const job of fallbackJobs) {
+          const key = (job?.url || `${job?.title || ''}|${job?.company || ''}|${job?.location || ''}`).trim()
+          if (!key || seen.has(key)) {
+            continue
+          }
+          seen.add(key)
+          deduped.push(job)
+        }
+
+        if (deduped.length > 0) {
+          notice.value = 'No exact matches for selected locations. Showing remote results.'
+        }
+      }
     }
 
     jobs.value = deduped
@@ -255,6 +283,7 @@ function saveJob(job) {
           <h2>Job Results</h2>
           <div v-if="loading">Loading...</div>
           <div v-if="error" class="error">{{ error }}</div>
+          <div v-if="notice" class="notice">{{ notice }}</div>
           <div v-if="jobs.length === 0 && !loading && !error" class="no-results">No jobs found.</div>
           <div v-for="job in jobs" :key="job.url || job.id || job.title + job.company" class="job-card">
             <div class="job-card-header">
@@ -409,6 +438,14 @@ function saveJob(job) {
 }
 .content {
   flex: 1;
+}
+.notice {
+  margin: 0.5rem 0;
+  padding: 0.6rem 0.8rem;
+  border-radius: 6px;
+  background: #eef8f2;
+  color: #1f6f4a;
+  border: 1px solid #cdebd9;
 }
 .search-box {
   margin-bottom: 2rem;

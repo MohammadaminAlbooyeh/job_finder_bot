@@ -1,12 +1,5 @@
-# Example rules for job filtering
-include_keywords:
-  - senior
-  - lead
-
-exclude_keywords:
-  - internship
-  - junior
-
-location_whitelist:
-  - remote
-  - ny
+# Default rules are intentionally broad to avoid empty results for common searches.
+# Add your own values only if you want strict filtering.
+include_keywords: []
+exclude_keywords: []
+location_whitelist: []
