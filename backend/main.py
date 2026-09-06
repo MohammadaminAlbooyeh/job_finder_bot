@@ -72,7 +72,11 @@ def _load_schedule_config():
         return None
     try:
         with open(config_path, "r", encoding="utf-8") as f:
-            return json.load(f)
+            config = json.load(f)
+        # migrate the older single-"location" format
+        if config and "locations" not in config and config.get("location"):
+            config["locations"] = [config.pop("location")]
+        return config
     except Exception:
         return None
 
@@ -140,22 +144,25 @@ def history():
 
 @app.get("/schedule-config")
 def get_schedule_config():
-    return getattr(app.state, "schedule_config", None) or {"titles": [], "location": ""}
+    return getattr(app.state, "schedule_config", None) or {"titles": [], "locations": []}
 
 
 @app.post("/schedule-config")
 async def set_schedule_config(request: Request):
-    """Configure a fixed list of job titles (2-3, or as many as you like) that the
-    every-2-hours auto-scan will keep searching for a single location, until this
-    is called again — independent of whatever is typed into the manual search box."""
+    """Configure a fixed list of job titles and locations (2-3, or as many as you
+    like, of each) that the every-2-hours auto-scan will keep searching — every
+    title x location combination — until this is called again, independent of
+    whatever is typed into the manual search box."""
     body = await request.json()
     titles = [t.strip() for t in body.get("titles", []) if isinstance(t, str) and t.strip()]
-    location = (body.get("location") or "remote").strip()
+    locations = [l.strip() for l in body.get("locations", []) if isinstance(l, str) and l.strip()]
 
     if not titles:
         return JSONResponse(content={"error": "Provide at least one job title."}, status_code=400)
+    if not locations:
+        locations = ["remote"]
 
-    config = {"titles": titles, "location": location}
+    config = {"titles": titles, "locations": locations}
     app.state.schedule_config = config
     _save_schedule_config(config)
     return config
@@ -267,21 +274,23 @@ def run_all(
     triggered_by="manual",
 ):
     queries = query if isinstance(query, list) else [query]
+    locations = location if isinstance(location, list) else [location]
     all_jobs = []
-    for q in queries:
-        print(f"Scraping LinkedIn for '{q}'...")
-        try:
-            all_jobs.extend(
-                scrape_linkedin(
-                    query=q,
-                    location=location,
-                    num_pages=num_pages,
-                    date_posted=date_posted,
-                    experience_level=experience_level,
+    for loc in locations:
+        for q in queries:
+            print(f"Scraping LinkedIn for '{q}' in '{loc}'...")
+            try:
+                all_jobs.extend(
+                    scrape_linkedin(
+                        query=q,
+                        location=loc,
+                        num_pages=num_pages,
+                        date_posted=date_posted,
+                        experience_level=experience_level,
+                    )
                 )
-            )
-        except Exception as e:
-            print(f"LinkedIn scraping failed for '{q}':", e)
+            except Exception as e:
+                print(f"LinkedIn scraping failed for '{q}' in '{loc}':", e)
 
     all_jobs = dedupe_jobs(all_jobs)
     # if rules file provided, load defaults unless explicitly passed
@@ -358,7 +367,7 @@ def run_all(
 
     _record_run(
         query=", ".join(queries) if isinstance(query, list) else query,
-        location=location,
+        location=", ".join(locations) if isinstance(location, list) else location,
         date_posted=date_posted,
         experience_level=experience_level,
         total=len(filtered_jobs),
@@ -372,8 +381,8 @@ def run_all(
 def scheduled_run(triggered_by="scheduler"):
     """Runs the LinkedIn search automatically on a recurring interval.
 
-    Prefers an explicit /schedule-config (a fixed list of job titles + one
-    location) if one has been set — that stays in effect until changed again,
+    Prefers an explicit /schedule-config (a fixed list of job titles and
+    locations) if one has been set — that stays in effect until changed again,
     regardless of what gets typed into the manual search box. Falls back to
     whatever was last searched manually, then to JOB_QUERY/JOB_LOCATION env vars.
     """
@@ -382,7 +391,7 @@ def scheduled_run(triggered_by="scheduler"):
         print("Running scheduled LinkedIn search (schedule-config):", schedule_config)
         return run_all(
             query=schedule_config["titles"],
-            location=schedule_config.get("location") or "remote",
+            location=schedule_config.get("locations") or ["remote"],
             num_pages=int(os.getenv("JOB_PAGES", "1")),
             enable_email=os.getenv("ENABLE_EMAIL", "false").lower() in ("true", "1", "yes"),
             enable_telegram=os.getenv("ENABLE_TELEGRAM", "false").lower() in ("true", "1", "yes"),
