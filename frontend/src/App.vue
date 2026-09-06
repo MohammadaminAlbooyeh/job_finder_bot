@@ -66,6 +66,10 @@ const citySuggestions = ref([])
 const showCitySuggestions = ref(false)
 const jobTitleSuggestions = ref([])
 const showJobTitleSuggestions = ref(false)
+const scheduleTitleSuggestions = ref([])
+const showScheduleTitleSuggestions = ref(false)
+const scheduleLocationSuggestions = ref([])
+const showScheduleLocationSuggestions = ref(false)
 
 function updateCitySuggestions() {
   const val = searchLocation.value.trim().toLowerCase()
@@ -551,16 +555,52 @@ async function runNow() {
 }
 
 // --- Auto-scan schedule config (fixed titles the 2-hourly scan keeps using) ---
-function addScheduleTitle() {
-  const val = scheduleTitleInput.value.trim()
+function addScheduleTitle(title) {
+  const val = (typeof title === 'string' ? title : scheduleTitleInput.value).trim()
   if (val && !scheduleTitles.value.includes(val)) {
     scheduleTitles.value.push(val)
   }
   scheduleTitleInput.value = ''
+  showScheduleTitleSuggestions.value = false
 }
 
 function removeScheduleTitle(title) {
   scheduleTitles.value = scheduleTitles.value.filter(t => t !== title)
+}
+
+function updateScheduleTitleSuggestions() {
+  const val = scheduleTitleInput.value.trim().toLowerCase()
+  if (!val) {
+    scheduleTitleSuggestions.value = []
+    showScheduleTitleSuggestions.value = false
+    return
+  }
+  scheduleTitleSuggestions.value = jobTitleList.filter(title => title.toLowerCase().startsWith(val)).slice(0, 6)
+  showScheduleTitleSuggestions.value = scheduleTitleSuggestions.value.length > 0
+}
+
+function onScheduleTitleEnter() {
+  if (scheduleTitleSuggestions.value.length > 0) {
+    addScheduleTitle(scheduleTitleSuggestions.value[0])
+  } else {
+    addScheduleTitle()
+  }
+}
+
+function updateScheduleLocationSuggestions() {
+  const val = scheduleLocation.value.trim().toLowerCase()
+  if (!val) {
+    scheduleLocationSuggestions.value = []
+    showScheduleLocationSuggestions.value = false
+    return
+  }
+  scheduleLocationSuggestions.value = locationList.filter(loc => loc.toLowerCase().startsWith(val)).slice(0, 6)
+  showScheduleLocationSuggestions.value = scheduleLocationSuggestions.value.length > 0
+}
+
+function selectScheduleLocationSuggestion(loc) {
+  scheduleLocation.value = loc
+  showScheduleLocationSuggestions.value = false
 }
 
 async function fetchScheduleConfig() {
@@ -756,14 +796,25 @@ onUnmounted(() => {
             </p>
           </div>
           <div class="cv-row">
-            <input
-              v-model="scheduleTitleInput"
-              type="text"
-              placeholder="Job title (e.g. python developer)"
-              @keyup.enter="addScheduleTitle"
-              class="schedule-title-input"
-            />
-            <button class="btn-secondary" @click="addScheduleTitle">Add title</button>
+            <div class="search-field">
+              <input
+                v-model="scheduleTitleInput"
+                type="text"
+                placeholder="Job title (e.g. python developer)"
+                @keyup.enter="onScheduleTitleEnter"
+                @input="updateScheduleTitleSuggestions"
+                @focus="updateScheduleTitleSuggestions"
+                @blur="setTimeout(() => showScheduleTitleSuggestions = false, 120)"
+                autocomplete="off"
+                class="schedule-title-input"
+              />
+              <ul v-if="showScheduleTitleSuggestions" class="suggestions">
+                <li v-for="title in scheduleTitleSuggestions" :key="title" @mousedown.prevent="addScheduleTitle(title)">
+                  {{ title }}
+                </li>
+              </ul>
+            </div>
+            <button class="btn-secondary" @click="addScheduleTitle()">Add title</button>
           </div>
           <div v-if="scheduleTitles.length" class="selected-locations">
             <span v-for="title in scheduleTitles" :key="title" class="location-tag">
@@ -772,7 +823,24 @@ onUnmounted(() => {
             </span>
           </div>
           <div class="cv-row" style="margin-top: 0.8rem;">
-            <input v-model="scheduleLocation" type="text" placeholder="Location (e.g. Italy, remote)" class="schedule-title-input" />
+            <div class="search-field">
+              <input
+                v-model="scheduleLocation"
+                type="text"
+                placeholder="Location (e.g. Italy, remote)"
+                @keyup.enter="() => { if (scheduleLocationSuggestions.length > 0) selectScheduleLocationSuggestion(scheduleLocationSuggestions[0]) }"
+                @input="updateScheduleLocationSuggestions"
+                @focus="updateScheduleLocationSuggestions"
+                @blur="setTimeout(() => showScheduleLocationSuggestions = false, 120)"
+                autocomplete="off"
+                class="schedule-title-input"
+              />
+              <ul v-if="showScheduleLocationSuggestions" class="suggestions">
+                <li v-for="loc in scheduleLocationSuggestions" :key="loc" @mousedown.prevent="selectScheduleLocationSuggestion(loc)">
+                  {{ loc }}
+                </li>
+              </ul>
+            </div>
             <button class="btn-primary" @click="saveScheduleConfig" :disabled="savingSchedule">
               <span v-if="savingSchedule" class="spinner"></span>
               {{ savingSchedule ? 'Saving…' : 'Save schedule' }}
