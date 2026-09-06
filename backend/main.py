@@ -1,6 +1,7 @@
 import json
 import os
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 
 from scraper.linkedin_scraper import scrape_linkedin
 from filters.job_filter import dedupe_jobs, filter_jobs, load_rules
@@ -16,10 +17,13 @@ from fastapi.middleware.cors import CORSMiddleware
 
 
 scheduler = BackgroundScheduler()
+HISTORY_LIMIT = 30
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    app.state.last_search_params = None
+    app.state.history = _load_history()
     interval_hours = float(os.getenv("SCHEDULE_INTERVAL_HOURS", "2"))
     scheduler.add_job(scheduled_run, "interval", hours=interval_hours, id="linkedin_scan", replace_existing=True)
     scheduler.start()
@@ -39,6 +43,44 @@ app.add_middleware(
     allow_headers=["*"]
 )
 
+
+def _load_history():
+    history_path = os.getenv("HISTORY_PATH", "run_history.json")
+    if not os.path.exists(history_path):
+        return []
+    try:
+        with open(history_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+
+def _save_history(history):
+    history_path = os.getenv("HISTORY_PATH", "run_history.json")
+    with open(history_path, "w", encoding="utf-8") as f:
+        json.dump(history[-HISTORY_LIMIT:], f, ensure_ascii=False, indent=2)
+
+
+def _record_run(query, location, job_type, date_posted, total, new_count, triggered_by):
+    entry = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "query": query,
+        "location": location,
+        "job_type": job_type,
+        "date_posted": date_posted,
+        "total": total,
+        "new_count": new_count,
+        "triggered_by": triggered_by,
+    }
+    history = getattr(app.state, "history", None)
+    if history is None:
+        history = _load_history()
+    history.append(entry)
+    history = history[-HISTORY_LIMIT:]
+    app.state.history = history
+    _save_history(history)
+
+
 @app.get("/")
 def root():
     return {"service": "job-finder-bot-api", "status": "ok"}
@@ -53,6 +95,33 @@ def health():
 def healthz():
     return {"status": "ok"}
 
+
+@app.get("/status")
+def status():
+    job = scheduler.get_job("linkedin_scan")
+    interval_hours = float(os.getenv("SCHEDULE_INTERVAL_HOURS", "2"))
+    history = getattr(app.state, "history", None) or []
+    last_run = history[-1] if history else None
+    return {
+        "interval_hours": interval_hours,
+        "next_run_at": job.next_run_time.isoformat() if job and job.next_run_time else None,
+        "last_run": last_run,
+        "last_search_params": getattr(app.state, "last_search_params", None),
+    }
+
+
+@app.get("/history")
+def history():
+    return list(reversed(getattr(app.state, "history", None) or []))
+
+
+@app.post("/run-now")
+def run_now():
+    """Manually trigger the same search the scheduler would run next."""
+    jobs = scheduled_run(triggered_by="manual")
+    return JSONResponse(content=jobs)
+
+
 @app.get("/run")
 def run_jobs(
     query: str = "python developer",
@@ -60,6 +129,8 @@ def run_jobs(
     num_pages: int = 1,
     job_type: str = "",
     date_posted: str = "",
+    include_keywords: str = "",
+    exclude_keywords: str = "",
 ):
     app.state.last_search_params = {
         "query": query,
@@ -67,6 +138,8 @@ def run_jobs(
         "num_pages": num_pages,
         "job_type": job_type or None,
         "date_posted": date_posted or None,
+        "include_keywords": include_keywords or None,
+        "exclude_keywords": exclude_keywords or None,
     }
     jobs = run_all(
         query=query,
@@ -74,6 +147,9 @@ def run_jobs(
         num_pages=num_pages,
         job_type=job_type or None,
         date_posted=date_posted or None,
+        include_keywords=[k.strip() for k in include_keywords.split(",") if k.strip()] or None,
+        exclude_keywords=[k.strip() for k in exclude_keywords.split(",") if k.strip()] or None,
+        triggered_by="manual",
     )
     return JSONResponse(content=jobs)
 
@@ -115,6 +191,7 @@ def run_all(
     enable_telegram=False,
     job_type=None,
     date_posted=None,
+    triggered_by="manual",
 ):
     print("Scraping LinkedIn...")
     try:
@@ -156,6 +233,10 @@ def run_all(
 
     # compute new jobs vs seen state and update state
     new_jobs = detect_new_jobs(filtered_jobs, state_path=state_path)
+    new_urls = {j.get("url") for j in new_jobs if j.get("url")}
+    for job in filtered_jobs:
+        job["is_new"] = (job.get("url") in new_urls) if job.get("url") else True
+
     if new_only:
         to_write = new_jobs
     else:
@@ -194,22 +275,37 @@ def run_all(
         except Exception as e:
             print("Telegram notification failed:", e)
 
+    _record_run(
+        query=query,
+        location=location,
+        job_type=job_type,
+        date_posted=date_posted,
+        total=len(filtered_jobs),
+        new_count=len(new_jobs),
+        triggered_by=triggered_by,
+    )
+
     return filtered_jobs
 
 
-def scheduled_run():
+def scheduled_run(triggered_by="scheduler"):
     """Runs the LinkedIn search automatically on a recurring interval using the
     last parameters submitted through the API (falls back to defaults)."""
     params = getattr(app.state, "last_search_params", None) or {}
     print("Running scheduled LinkedIn search:", params)
-    run_all(
+    include_keywords = params.get("include_keywords")
+    exclude_keywords = params.get("exclude_keywords")
+    return run_all(
         query=params.get("query", os.getenv("JOB_QUERY", "python developer")),
         location=params.get("location", os.getenv("JOB_LOCATION", "remote")),
         num_pages=params.get("num_pages", int(os.getenv("JOB_PAGES", "1"))),
         job_type=params.get("job_type"),
         date_posted=params.get("date_posted"),
+        include_keywords=[k.strip() for k in include_keywords.split(",") if k.strip()] if include_keywords else None,
+        exclude_keywords=[k.strip() for k in exclude_keywords.split(",") if k.strip()] if exclude_keywords else None,
         enable_email=os.getenv("ENABLE_EMAIL", "false").lower() in ("true", "1", "yes"),
         enable_telegram=os.getenv("ENABLE_TELEGRAM", "false").lower() in ("true", "1", "yes"),
+        triggered_by=triggered_by,
     )
 
 
@@ -225,4 +321,5 @@ if __name__ == "__main__":
         enable_telegram=os.getenv("ENABLE_TELEGRAM", "false").lower() in ("true", "1", "yes"),
         job_type=os.getenv("JOB_TYPE") or None,
         date_posted=os.getenv("DATE_POSTED") or None,
+        triggered_by="cli",
     )

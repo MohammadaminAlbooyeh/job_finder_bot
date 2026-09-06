@@ -1,16 +1,21 @@
 
 
 <script setup>
-import { ref } from 'vue'
-
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 
 const searchTitle = ref('')
 const searchLocation = ref('')
 const selectedLocations = ref([])
 const jobType = ref('')
 const datePosted = ref('')
+const includeKeywords = ref('')
+const excludeKeywords = ref('')
+const sortBy = ref('relevance')
+const numPages = ref(1)
+
 const jobs = ref([])
 const loading = ref(false)
+const loadingMore = ref(false)
 const error = ref('')
 const notice = ref('')
 
@@ -18,6 +23,18 @@ const cvFile = ref(null)
 const cvUploading = ref(false)
 const cvAnalysis = ref(null)
 const cvError = ref('')
+
+const activeTab = ref('results') // results | saved | history
+const savedJobs = ref([])
+const toasts = ref([])
+let toastId = 0
+
+const theme = ref('light')
+
+const scanStatus = ref(null)
+const runningNow = ref(false)
+const historyList = ref([])
+const historyLoading = ref(false)
 
 // Demo country/city and job title lists, can be replaced with API
 const countryList = [
@@ -42,7 +59,6 @@ function updateCitySuggestions() {
     showCitySuggestions.value = false
     return
   }
-  // Exclude already selected locations
   citySuggestions.value = locationList.filter(loc => loc.toLowerCase().startsWith(val) && !selectedLocations.value.includes(loc)).slice(0, 6)
   showCitySuggestions.value = citySuggestions.value.length > 0
 }
@@ -90,11 +106,56 @@ function getApiBaseUrl() {
   return productionFallback
 }
 
+function jobKey(job) {
+  return (job?.url || `${job?.title || ''}|${job?.company || ''}|${job?.location || ''}`).trim()
+}
+
+function buildQueryParams(pages) {
+  const parts = []
+  if (jobType.value) parts.push(`job_type=${encodeURIComponent(jobType.value)}`)
+  if (datePosted.value) parts.push(`date_posted=${encodeURIComponent(datePosted.value)}`)
+  if (includeKeywords.value.trim()) parts.push(`include_keywords=${encodeURIComponent(includeKeywords.value.trim())}`)
+  if (excludeKeywords.value.trim()) parts.push(`exclude_keywords=${encodeURIComponent(excludeKeywords.value.trim())}`)
+  if (pages && pages > 1) parts.push(`num_pages=${pages}`)
+  return parts.length ? `&${parts.join('&')}` : ''
+}
+
+async function fetchJobsForLocations(apiUrl, finalQuery, locations, pages) {
+  const extraParams = buildQueryParams(pages)
+  const responses = await Promise.all(
+    locations.map(async (loc) => {
+      const res = await fetch(
+        `${apiUrl}/run?query=${encodeURIComponent(finalQuery)}&location=${encodeURIComponent(loc)}${extraParams}`
+      )
+      if (!res.ok) {
+        throw new Error(`API error for ${loc}: ${res.status} ${res.statusText}`)
+      }
+      const data = await res.json()
+      return Array.isArray(data) ? data : (Array.isArray(data.jobs) ? data.jobs : [])
+    })
+  )
+  return responses.flat()
+}
+
+function dedupeJobs(list) {
+  const deduped = []
+  const seen = new Set()
+  for (const job of list) {
+    const key = jobKey(job)
+    if (!key || seen.has(key)) continue
+    seen.add(key)
+    deduped.push(job)
+  }
+  return deduped
+}
+
 async function searchJobs() {
   loading.value = true
   error.value = ''
   notice.value = ''
   jobs.value = []
+  numPages.value = 1
+  activeTab.value = 'results'
 
   try {
     const apiUrl = getApiBaseUrl()
@@ -103,62 +164,19 @@ async function searchJobs() {
       ? [...selectedLocations.value]
       : [searchLocation.value.trim() || 'remote']
 
-    const extraParams = `${jobType.value ? `&job_type=${encodeURIComponent(jobType.value)}` : ''}${datePosted.value ? `&date_posted=${encodeURIComponent(datePosted.value)}` : ''}`
-
-    const responses = await Promise.all(
-      locations.map(async (loc) => {
-        const res = await fetch(
-          `${apiUrl}/run?query=${encodeURIComponent(finalQuery)}&location=${encodeURIComponent(loc)}${extraParams}`
-        )
-
-        if (!res.ok) {
-          throw new Error(`API error for ${loc}: ${res.status} ${res.statusText}`)
-        }
-
-        const data = await res.json()
-        return Array.isArray(data) ? data : (Array.isArray(data.jobs) ? data.jobs : [])
-      })
-    )
-
-    const merged = responses.flat()
-    const deduped = []
-    const seen = new Set()
-    for (const job of merged) {
-      const key = (job?.url || `${job?.title || ''}|${job?.company || ''}|${job?.location || ''}`).trim()
-      if (!key || seen.has(key)) {
-        continue
-      }
-      seen.add(key)
-      deduped.push(job)
-    }
+    let merged = await fetchJobsForLocations(apiUrl, finalQuery, locations, numPages.value)
+    let deduped = dedupeJobs(merged)
 
     if (deduped.length === 0 && !locations.some((loc) => loc.toLowerCase() === 'remote')) {
-      const fallbackRes = await fetch(
-        `${apiUrl}/run?query=${encodeURIComponent(finalQuery)}&location=${encodeURIComponent('remote')}${extraParams}`
-      )
-
-      if (fallbackRes.ok) {
-        const fallbackData = await fallbackRes.json()
-        const fallbackJobs = Array.isArray(fallbackData)
-          ? fallbackData
-          : (Array.isArray(fallbackData.jobs) ? fallbackData.jobs : [])
-
-        for (const job of fallbackJobs) {
-          const key = (job?.url || `${job?.title || ''}|${job?.company || ''}|${job?.location || ''}`).trim()
-          if (!key || seen.has(key)) {
-            continue
-          }
-          seen.add(key)
-          deduped.push(job)
-        }
-
-        if (deduped.length > 0) {
-          notice.value = 'No exact matches for selected locations. Showing remote results.'
-        }
+      const fallbackJobs = await fetchJobsForLocations(apiUrl, finalQuery, ['remote'], numPages.value)
+      deduped = dedupeJobs(fallbackJobs)
+      if (deduped.length > 0) {
+        notice.value = 'No exact matches for selected locations. Showing remote results.'
       }
     }
 
     jobs.value = deduped
+    fetchStatus()
   } catch (e) {
     const rawMessage = e?.message || 'Error fetching jobs'
     const normalizedMessage = rawMessage.toLowerCase()
@@ -171,6 +189,47 @@ async function searchJobs() {
     loading.value = false
   }
 }
+
+async function loadMore() {
+  loadingMore.value = true
+  try {
+    const apiUrl = getApiBaseUrl()
+    const finalQuery = searchTitle.value.trim() || 'python developer'
+    const locations = selectedLocations.value.length > 0
+      ? [...selectedLocations.value]
+      : [searchLocation.value.trim() || 'remote']
+
+    numPages.value += 1
+    const merged = await fetchJobsForLocations(apiUrl, finalQuery, locations, numPages.value)
+    jobs.value = dedupeJobs([...jobs.value, ...merged])
+    showToast(`Loaded page ${numPages.value}`, 'success')
+  } catch (e) {
+    showToast(e?.message || 'Could not load more jobs', 'error')
+  } finally {
+    loadingMore.value = false
+  }
+}
+
+function clearFilters() {
+  jobType.value = ''
+  datePosted.value = ''
+  includeKeywords.value = ''
+  excludeKeywords.value = ''
+  selectedLocations.value = []
+  searchLocation.value = ''
+  showToast('Filters cleared', 'success')
+}
+
+const sortedJobs = computed(() => {
+  const list = [...jobs.value]
+  if (sortBy.value === 'title') {
+    return list.sort((a, b) => (a.title || '').localeCompare(b.title || ''))
+  }
+  if (sortBy.value === 'newest') {
+    return list.sort((a, b) => (b.is_new === a.is_new) ? 0 : (b.is_new ? 1 : -1))
+  }
+  return list
+})
 
 function onCvFileSelected(event) {
   cvFile.value = event.target.files?.[0] || null
@@ -209,20 +268,169 @@ async function uploadCv() {
   }
 }
 
-function saveJob(job) {
-  // Placeholder for save functionality
-  alert('Job saved!')
+// --- Toasts ---
+function showToast(message, kind = 'success') {
+  const id = ++toastId
+  toasts.value.push({ id, message, kind })
+  setTimeout(() => {
+    toasts.value = toasts.value.filter(t => t.id !== id)
+  }, 3000)
 }
+
+// --- Saved jobs (localStorage) ---
+function loadSavedJobs() {
+  try {
+    const raw = localStorage.getItem('jobfinder_saved_jobs')
+    savedJobs.value = raw ? JSON.parse(raw) : []
+  } catch {
+    savedJobs.value = []
+  }
+}
+
+function persistSavedJobs() {
+  try {
+    localStorage.setItem('jobfinder_saved_jobs', JSON.stringify(savedJobs.value))
+  } catch {
+    // storage unavailable (private mode, etc.) — ignore
+  }
+}
+
+function isSaved(job) {
+  const key = jobKey(job)
+  return savedJobs.value.some(j => jobKey(j) === key)
+}
+
+function saveJob(job) {
+  const key = jobKey(job)
+  if (isSaved(job)) {
+    savedJobs.value = savedJobs.value.filter(j => jobKey(j) !== key)
+    showToast('Removed from saved jobs', 'success')
+  } else {
+    savedJobs.value = [...savedJobs.value, job]
+    showToast('Job saved', 'success')
+  }
+  persistSavedJobs()
+}
+
+function copyLink(job) {
+  if (!job.url) return
+  navigator.clipboard?.writeText(job.url)
+    .then(() => showToast('Link copied to clipboard', 'success'))
+    .catch(() => showToast('Could not copy link', 'error'))
+}
+
+// --- Theme ---
+function applyTheme() {
+  document.documentElement.setAttribute('data-theme', theme.value)
+}
+
+function toggleTheme() {
+  theme.value = theme.value === 'dark' ? 'light' : 'dark'
+  localStorage.setItem('jobfinder_theme', theme.value)
+  applyTheme()
+}
+
+// --- Auto-scan status & history ---
+async function fetchStatus() {
+  try {
+    const res = await fetch(`${getApiBaseUrl()}/status`)
+    if (res.ok) scanStatus.value = await res.json()
+  } catch {
+    // backend unreachable — leave previous status as-is
+  }
+}
+
+async function fetchHistory() {
+  historyLoading.value = true
+  try {
+    const res = await fetch(`${getApiBaseUrl()}/history`)
+    if (res.ok) historyList.value = await res.json()
+  } catch {
+    showToast('Could not load scan history', 'error')
+  } finally {
+    historyLoading.value = false
+  }
+}
+
+async function runNow() {
+  runningNow.value = true
+  try {
+    const res = await fetch(`${getApiBaseUrl()}/run-now`, { method: 'POST' })
+    if (!res.ok) throw new Error(`API error: ${res.status}`)
+    const data = await res.json()
+    jobs.value = dedupeJobs(Array.isArray(data) ? data : [])
+    activeTab.value = 'results'
+    showToast('Scan triggered — results updated', 'success')
+    fetchStatus()
+  } catch (e) {
+    showToast(e?.message || 'Could not trigger scan', 'error')
+  } finally {
+    runningNow.value = false
+  }
+}
+
+function selectTab(tab) {
+  activeTab.value = tab
+  if (tab === 'history') fetchHistory()
+}
+
+function formatTime(iso) {
+  if (!iso) return '—'
+  try {
+    return new Date(iso).toLocaleString()
+  } catch {
+    return iso
+  }
+}
+
+let statusTimer = null
+
+onMounted(() => {
+  loadSavedJobs()
+  const storedTheme = localStorage.getItem('jobfinder_theme')
+  if (storedTheme) theme.value = storedTheme
+  applyTheme()
+  fetchStatus()
+  statusTimer = setInterval(fetchStatus, 60000)
+})
+
+onUnmounted(() => {
+  if (statusTimer) clearInterval(statusTimer)
+})
 </script>
 
 <template>
   <div id="app">
+    <!-- Toasts -->
+    <div class="toast-stack">
+      <div v-for="toast in toasts" :key="toast.id" class="toast" :class="`toast-${toast.kind}`">
+        {{ toast.message }}
+      </div>
+    </div>
+
     <!-- Header -->
     <header class="header">
-      <div class="app-title">Find Your Dream Job</div>
-      <div class="header-actions">
-        <button class="login-btn">Login / Register</button>
-        <button class="post-job-btn">Post Job</button>
+      <div class="header-inner">
+        <div class="brand">
+          <span class="brand-mark">JF</span>
+          <div class="brand-text">
+            <span class="app-title">Job Finder</span>
+            <span class="app-subtitle">LinkedIn search, automated</span>
+          </div>
+        </div>
+        <div class="header-actions">
+          <div class="scan-badge" :title="scanStatus?.next_run_at ? `Next scan: ${formatTime(scanStatus.next_run_at)}` : ''">
+            <span class="dot"></span>
+            <span>{{ scanStatus?.interval_hours ? `Auto-scan every ${scanStatus.interval_hours}h` : 'Auto-scan' }}</span>
+          </div>
+          <button class="btn-secondary btn-sm" @click="runNow" :disabled="runningNow">
+            <span v-if="runningNow" class="spinner spinner-dark"></span>
+            {{ runningNow ? 'Running…' : 'Run Now' }}
+          </button>
+          <button class="icon-btn" @click="toggleTheme" :title="theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'">
+            {{ theme === 'dark' ? '☀️' : '🌙' }}
+          </button>
+        </div>
       </div>
     </header>
 
@@ -250,36 +458,54 @@ function saveJob(job) {
           </select>
         </div>
         <div class="filter-group">
-          <a :href="`${getApiBaseUrl()}/download/csv`" target="_blank" rel="noopener">
-            <button style="width:100%;">Download CSV</button>
-          </a>
+          <label>Include keywords</label>
+          <input v-model="includeKeywords" type="text" placeholder="e.g. django, api" />
         </div>
+        <div class="filter-group">
+          <label>Exclude keywords</label>
+          <input v-model="excludeKeywords" type="text" placeholder="e.g. senior, lead" />
+        </div>
+        <button class="btn-secondary" style="width:100%; margin-bottom: 0.8rem;" @click="clearFilters">
+          Clear filters
+        </button>
+        <a class="download-link" :href="`${getApiBaseUrl()}/download/csv`" target="_blank" rel="noopener">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 19h16"/></svg>
+          Download CSV
+        </a>
       </aside>
 
       <!-- Main Section -->
       <main class="content">
         <!-- CV Upload -->
         <section class="cv-box">
-          <h3>Find jobs based on your CV</h3>
-          <div class="cv-row">
-            <input type="file" accept=".pdf,.docx,.txt" @change="onCvFileSelected" />
-            <button @click="uploadCv" :disabled="cvUploading">{{ cvUploading ? 'Analyzing...' : 'Analyze CV' }}</button>
+          <div class="cv-box-header">
+            <h3>Find jobs from your CV</h3>
+            <p class="cv-box-subtitle">Upload a CV and we'll suggest a role, skills and a matching search.</p>
           </div>
-          <div v-if="cvError" class="error">{{ cvError }}</div>
+          <div class="cv-row">
+            <label class="file-input">
+              <input type="file" accept=".pdf,.docx,.txt" @change="onCvFileSelected" />
+              <span>{{ cvFile ? cvFile.name : 'Choose file (.pdf, .docx, .txt)' }}</span>
+            </label>
+            <button class="btn-primary" @click="uploadCv" :disabled="cvUploading">
+              <span v-if="cvUploading" class="spinner"></span>
+              {{ cvUploading ? 'Analyzing…' : 'Analyze CV' }}
+            </button>
+          </div>
+          <div v-if="cvError" class="alert alert-error">{{ cvError }}</div>
           <div v-if="cvAnalysis" class="cv-result">
-            <div>Detected role: <strong>{{ cvAnalysis.suggested_query }}</strong></div>
-            <div v-if="cvAnalysis.matched_skills?.length">
-              Skills found: {{ cvAnalysis.matched_skills.join(', ') }}
+            <div class="cv-result-row">Detected role <strong>{{ cvAnalysis.suggested_query }}</strong></div>
+            <div v-if="cvAnalysis.matched_skills?.length" class="skill-tags">
+              <span v-for="skill in cvAnalysis.matched_skills" :key="skill" class="skill-tag">{{ skill }}</span>
             </div>
-            <div class="cv-hint">Now pick a location and job type, then click Search.</div>
+            <div class="cv-hint">Pick a location and job type below, then click Search.</div>
           </div>
         </section>
 
         <!-- Search Box -->
-
         <section class="search-box">
           <div class="search-row">
-            <div style="position:relative; flex:1;">
+            <div class="search-field">
               <input
                 v-model="searchTitle"
                 type="text"
@@ -289,15 +515,14 @@ function saveJob(job) {
                 @focus="updateJobTitleSuggestions"
                 @blur="setTimeout(() => showJobTitleSuggestions = false, 120)"
                 autocomplete="off"
-                style="width:100%"
               />
-              <ul v-if="showJobTitleSuggestions" class="city-suggestions">
+              <ul v-if="showJobTitleSuggestions" class="suggestions">
                 <li v-for="title in jobTitleSuggestions" :key="title" @mousedown.prevent="selectJobTitleSuggestion(title)">
                   {{ title }}
                 </li>
               </ul>
             </div>
-            <div style="position:relative; flex:1; margin-left:1rem;">
+            <div class="search-field">
               <input
                 v-model="searchLocation"
                 type="text"
@@ -307,301 +532,792 @@ function saveJob(job) {
                 @focus="updateCitySuggestions"
                 @blur="setTimeout(() => showCitySuggestions = false, 120)"
                 autocomplete="off"
-                style="width:100%"
               />
-              <ul v-if="showCitySuggestions" class="city-suggestions">
+              <ul v-if="showCitySuggestions" class="suggestions">
                 <li v-for="city in citySuggestions" :key="city" @mousedown.prevent="selectCitySuggestion(city)">
                   {{ city }}
                 </li>
               </ul>
             </div>
-            <button @click="searchJobs" :disabled="loading" style="margin-left:1rem;">Search</button>
+            <button class="btn-primary btn-search" @click="searchJobs" :disabled="loading">
+              <span v-if="loading" class="spinner"></span>
+              {{ loading ? 'Searching…' : 'Search' }}
+            </button>
           </div>
-          <div class="selected-locations-row">
-            <div class="selected-locations">
-              <span v-for="city in selectedLocations" :key="city" class="location-tag">
-                {{ city }}
-                <button class="remove-tag" @click.prevent="removeLocation(city)">&times;</button>
-              </span>
+          <div v-if="selectedLocations.length" class="selected-locations">
+            <span v-for="city in selectedLocations" :key="city" class="location-tag">
+              {{ city }}
+              <button class="remove-tag" @click.prevent="removeLocation(city)">&times;</button>
+            </span>
+          </div>
+        </section>
+
+        <!-- Tabs -->
+        <div class="tabs">
+          <button class="tab" :class="{ active: activeTab === 'results' }" @click="selectTab('results')">
+            Results <span v-if="jobs.length" class="tab-count">{{ jobs.length }}</span>
+          </button>
+          <button class="tab" :class="{ active: activeTab === 'saved' }" @click="selectTab('saved')">
+            Saved <span v-if="savedJobs.length" class="tab-count">{{ savedJobs.length }}</span>
+          </button>
+          <button class="tab" :class="{ active: activeTab === 'history' }" @click="selectTab('history')">
+            Scan history
+          </button>
+          <select v-if="activeTab === 'results'" v-model="sortBy" class="sort-select">
+            <option value="relevance">Sort: Relevance</option>
+            <option value="newest">Sort: New first</option>
+            <option value="title">Sort: Title A-Z</option>
+          </select>
+        </div>
+
+        <!-- Results tab -->
+        <section v-if="activeTab === 'results'" class="job-list">
+          <div v-if="error" class="alert alert-error">{{ error }}</div>
+          <div v-if="notice" class="alert alert-notice">{{ notice }}</div>
+
+          <div v-if="loading" class="skeleton-list">
+            <div class="job-card skeleton" v-for="n in 3" :key="n">
+              <div class="skeleton-line w-60"></div>
+              <div class="skeleton-line w-30"></div>
+              <div class="skeleton-line w-90"></div>
+            </div>
+          </div>
+
+          <div v-else-if="jobs.length === 0 && !error" class="empty-state">
+            <div class="empty-icon">🔍</div>
+            <p>No jobs yet — try a search above or upload your CV.</p>
+          </div>
+
+          <template v-else>
+            <div class="job-grid">
+              <div v-for="job in sortedJobs" :key="jobKey(job)" class="job-card">
+                <span v-if="job.is_new" class="new-badge">New</span>
+                <div class="job-card-header">
+                  <span class="job-title">{{ job.title }}</span>
+                  <span class="company">{{ job.company }}</span>
+                </div>
+                <div class="job-card-meta">
+                  <span v-if="job.location" class="meta-tag">📍 {{ job.location }}</span>
+                  <span v-if="job.job_type" class="meta-tag meta-tag-accent">{{ job.job_type }}</span>
+                  <span v-if="job.posted_date" class="meta-tag">{{ job.posted_date }}</span>
+                </div>
+                <div v-if="job.summary" class="job-card-desc">
+                  {{ job.summary.slice(0, 140) }}{{ job.summary.length > 140 ? '…' : '' }}
+                </div>
+                <div class="job-card-actions">
+                  <a v-if="job.url" :href="job.url" target="_blank" rel="noopener" class="btn-primary btn-sm">Apply on LinkedIn</a>
+                  <button class="btn-secondary btn-sm" @click="copyLink(job)" title="Copy link">🔗</button>
+                  <button class="btn-secondary btn-sm" :class="{ 'btn-saved': isSaved(job) }" @click="saveJob(job)">
+                    {{ isSaved(job) ? '★ Saved' : '☆ Save' }}
+                  </button>
+                </div>
+              </div>
+            </div>
+            <div class="load-more-row">
+              <button class="btn-secondary" @click="loadMore" :disabled="loadingMore">
+                <span v-if="loadingMore" class="spinner spinner-dark"></span>
+                {{ loadingMore ? 'Loading…' : 'Load more' }}
+              </button>
+            </div>
+          </template>
+        </section>
+
+        <!-- Saved tab -->
+        <section v-else-if="activeTab === 'saved'" class="job-list">
+          <div v-if="savedJobs.length === 0" class="empty-state">
+            <div class="empty-icon">⭐</div>
+            <p>No saved jobs yet. Click "Save" on any job to keep it here.</p>
+          </div>
+          <div v-else class="job-grid">
+            <div v-for="job in savedJobs" :key="jobKey(job)" class="job-card">
+              <div class="job-card-header">
+                <span class="job-title">{{ job.title }}</span>
+                <span class="company">{{ job.company }}</span>
+              </div>
+              <div class="job-card-meta">
+                <span v-if="job.location" class="meta-tag">📍 {{ job.location }}</span>
+                <span v-if="job.job_type" class="meta-tag meta-tag-accent">{{ job.job_type }}</span>
+              </div>
+              <div class="job-card-actions">
+                <a v-if="job.url" :href="job.url" target="_blank" rel="noopener" class="btn-primary btn-sm">Apply on LinkedIn</a>
+                <button class="btn-secondary btn-sm" @click="copyLink(job)" title="Copy link">🔗</button>
+                <button class="btn-secondary btn-sm btn-saved" @click="saveJob(job)">Remove</button>
+              </div>
             </div>
           </div>
         </section>
 
-        <!-- Job List -->
-
-        <section class="job-list">
-          <h2>Job Results</h2>
-          <div v-if="loading">Loading...</div>
-          <div v-if="error" class="error">{{ error }}</div>
-          <div v-if="notice" class="notice">{{ notice }}</div>
-          <div v-if="jobs.length === 0 && !loading && !error" class="no-results">No jobs found.</div>
-          <div v-for="job in jobs" :key="job.url || job.id || job.title + job.company" class="job-card">
-            <div class="job-card-header">
-              <span class="job-title">{{ job.title }}</span>
-              <span class="company">{{ job.company }}</span>
-            </div>
-            <div class="job-card-meta">
-              <span class="location">{{ job.location }}</span>
-              <span v-if="job.job_type" class="job-type">{{ job.job_type }}</span>
-              <span v-if="job.posted_date" class="posted-date">{{ job.posted_date }}</span>
-            </div>
-            <div class="job-card-desc">
-              {{ job.description ? job.description.slice(0, 120) + (job.description.length > 120 ? '...' : '') : '' }}
-            </div>
-            <div class="job-card-actions">
-              <a v-if="job.url" :href="job.url" target="_blank" rel="noopener">
-                <button>Apply</button>
-              </a>
-              <button @click="saveJob(job)">Save</button>
-            </div>
+        <!-- History tab -->
+        <section v-else class="job-list">
+          <div v-if="historyLoading" class="empty-state"><p>Loading history…</p></div>
+          <div v-else-if="historyList.length === 0" class="empty-state">
+            <div class="empty-icon">🕓</div>
+            <p>No scans recorded yet — run a search or wait for the next auto-scan.</p>
           </div>
-        </section>
-
-        <section class="job-details">
-          <h2>Job Details</h2>
-          <!-- Job details will appear here -->
-        </section>
-
-        <!-- User Dashboard Placeholder -->
-        <section class="dashboard">
-          <h2>User Dashboard</h2>
-          <ul>
-            <li>Saved jobs</li>
-            <li>Applied jobs</li>
-            <li>Profile</li>
-          </ul>
+          <table v-else class="history-table">
+            <thead>
+              <tr>
+                <th>When</th>
+                <th>Query</th>
+                <th>Location</th>
+                <th>Type</th>
+                <th>Total</th>
+                <th>New</th>
+                <th>Trigger</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(entry, idx) in historyList" :key="idx">
+                <td>{{ formatTime(entry.timestamp) }}</td>
+                <td>{{ entry.query }}</td>
+                <td>{{ entry.location }}</td>
+                <td>{{ entry.job_type || '—' }}</td>
+                <td>{{ entry.total }}</td>
+                <td><span v-if="entry.new_count" class="meta-tag meta-tag-accent">{{ entry.new_count }} new</span><span v-else>0</span></td>
+                <td>{{ entry.triggered_by }}</td>
+              </tr>
+            </tbody>
+          </table>
         </section>
       </main>
     </div>
   </div>
 </template>
-# ...existing styles...
+
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+:root {
+  --ink: #16202a;
+  --ink-soft: #5b6b7a;
+  --line: #e4e9ee;
+  --surface: #ffffff;
+  --canvas: #f4f6f9;
+  --brand: #2f6fed;
+  --brand-dark: #1f4fc4;
+  --accent: #12a894;
+  --accent-soft: #e4f7f4;
+  --danger: #d64545;
+  --danger-soft: #fdecec;
+  --radius: 12px;
+  --shadow: 0 1px 2px rgba(16, 24, 40, 0.04), 0 4px 16px rgba(16, 24, 40, 0.06);
+}
+
+:root[data-theme="dark"] {
+  --ink: #e8edf3;
+  --ink-soft: #97a3b0;
+  --line: #2a323d;
+  --surface: #1a2028;
+  --canvas: #12161c;
+  --brand: #5b8cff;
+  --brand-dark: #7fa2ff;
+  --accent: #2bcdb4;
+  --accent-soft: rgba(43, 205, 180, 0.12);
+  --danger: #ff6b6b;
+  --danger-soft: rgba(255, 107, 107, 0.12);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 4px 16px rgba(0, 0, 0, 0.35);
+}
+
+* { box-sizing: border-box; }
+body { background: var(--canvas); }
+</style>
+
 <style scoped>
-.selected-locations {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.4rem;
-  margin-bottom: 0.2rem;
-}
-.location-tag {
-  background: #e6f4f1;
-  color: #222;
-  border-radius: 12px;
-  padding: 0.2rem 0.7rem 0.2rem 0.7rem;
-  font-size: 0.97em;
-  display: flex;
-  align-items: center;
-}
-.remove-tag {
-  background: none;
-  border: none;
-  color: #888;
-  font-size: 1.1em;
-  margin-left: 0.3em;
-  cursor: pointer;
-  padding: 0;
-}
-.remove-tag:hover {
-  color: #d00;
-}
-/* ...existing styles... */
 #app {
-  /* City autocomplete styles */
-  .city-suggestions {
-    position: absolute;
-    left: 0;
-    right: 0;
-    top: 100%;
-    z-index: 10;
-    background: #fff;
-    box-shadow: 0 4px 16px rgba(0,0,0,0.13);
-    border-radius: 0 0 8px 8px;
-    margin: 0;
-    padding: 0.2rem 0;
-    list-style: none;
-    max-height: 180px;
-    overflow-y: auto;
-  }
-  .city-suggestions li {
-    padding: 0.5rem 1rem;
-    cursor: pointer;
-    transition: background 0.15s;
-  }
-  .city-suggestions li:hover {
-    background: #f2f2f2;
-  }
-  font-family: 'Segoe UI', Arial, sans-serif;
-  background: #f8f9fa;
+  font-family: 'Inter', 'Segoe UI', Arial, sans-serif;
+  background: var(--canvas);
   min-height: 100vh;
+  color: var(--ink);
 }
+
+/* Toasts */
+.toast-stack {
+  position: fixed;
+  top: 1.2rem;
+  right: 1.2rem;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.toast {
+  padding: 0.7rem 1rem;
+  border-radius: 8px;
+  font-size: 0.87rem;
+  font-weight: 600;
+  color: #fff;
+  box-shadow: var(--shadow);
+  animation: toast-in 0.2s ease-out;
+}
+.toast-success { background: var(--accent); }
+.toast-error { background: var(--danger); }
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Header */
 .header {
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+}
+.header-inner {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 1rem 2rem;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 1rem 2rem;
-  background: #fff;
-  border-bottom: 1px solid #eee;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+.brand-mark {
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, var(--brand), var(--accent));
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 0.9rem;
+  letter-spacing: 0.5px;
+}
+.brand-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
 }
 .app-title {
-  font-size: 1.7rem;
+  font-size: 1.25rem;
   font-weight: 700;
-  color: #35495e;
-  letter-spacing: 0.5px;
-  padding: 0.2rem 0.5rem;
+  color: var(--ink);
 }
-.header-actions button {
-  margin-left: 1rem;
-  padding: 0.5rem 1.2rem;
-  border: none;
-  border-radius: 4px;
-  background: #42b883;
-  color: #fff;
+.app-subtitle {
+  font-size: 0.8rem;
+  color: var(--ink-soft);
+}
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+}
+.scan-badge {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.9rem;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 0.82rem;
   font-weight: 600;
-  cursor: pointer;
 }
+.scan-badge .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px rgba(18, 168, 148, 0.18);
+}
+.icon-btn {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  border-radius: 8px;
+  width: 38px;
+  height: 38px;
+  cursor: pointer;
+  font-size: 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.icon-btn:hover { border-color: var(--brand); }
+
+/* Layout */
 .main-layout {
   display: flex;
   max-width: 1200px;
   margin: 2rem auto;
   gap: 2rem;
+  padding: 0 2rem;
+  align-items: flex-start;
 }
 .sidebar {
-  width: 220px;
-  background: #fff;
-  border-radius: 8px;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.03);
-  padding: 1.5rem 1rem;
-  height: fit-content;
+  width: 240px;
+  flex-shrink: 0;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 1.5rem;
+  position: sticky;
+  top: 1.5rem;
+}
+.sidebar h3 {
+  margin: 0 0 1.1rem;
+  font-size: 0.95rem;
+  font-weight: 700;
 }
 .filter-group {
   margin-bottom: 1.2rem;
 }
 .filter-group label {
   display: block;
-  margin-bottom: 0.3rem;
-  font-weight: 500;
+  margin-bottom: 0.4rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--ink-soft);
 }
-.filter-group select, .filter-group input {
+.filter-group select,
+.filter-group input {
   width: 100%;
-  padding: 0.4rem;
-  border-radius: 4px;
-  border: 1px solid #ddd;
+  min-height: 46px;
+  padding: 0.7rem 0.9rem;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  font-family: inherit;
+  font-size: 0.92rem;
+  color: var(--ink);
+}
+.filter-group select:focus,
+.filter-group input:focus {
+  outline: none;
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px rgba(47, 111, 237, 0.12);
+}
+.download-link {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  width: 100%;
+  min-height: 46px;
+  padding: 0.7rem 1rem;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  color: var(--ink);
+  text-decoration: none;
+  font-weight: 600;
+  font-size: 0.9rem;
+  transition: background 0.15s, border-color 0.15s;
+}
+.download-link:hover {
+  background: var(--canvas);
+  border-color: var(--brand);
+  color: var(--brand);
 }
 .content {
   flex: 1;
+  min-width: 0;
 }
-.notice {
-  margin: 0.5rem 0;
-  padding: 0.6rem 0.8rem;
-  border-radius: 6px;
-  background: #eef8f2;
-  color: #1f6f4a;
-  border: 1px solid #cdebd9;
-}
-.cv-box {
-  background: #fff;
-  border-radius: 8px;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.04);
-  padding: 1.2rem;
+
+/* Shared surfaces */
+.cv-box, .search-box {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 1.4rem 1.5rem;
   margin-bottom: 1.5rem;
 }
+.cv-box-header h3 {
+  margin: 0 0 0.25rem;
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+.cv-box-subtitle {
+  margin: 0 0 1rem;
+  color: var(--ink-soft);
+  font-size: 0.88rem;
+}
+
+/* Buttons */
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.65rem 1.3rem;
+  border-radius: 8px;
+  border: none;
+  background: var(--brand);
+  color: #fff;
+  font-weight: 600;
+  font-size: 0.9rem;
+  cursor: pointer;
+  text-decoration: none;
+  transition: background 0.15s, transform 0.05s;
+  white-space: nowrap;
+}
+.btn-primary:hover:not(:disabled) { background: var(--brand-dark); }
+.btn-primary:active:not(:disabled) { transform: translateY(1px); }
+.btn-primary:disabled { opacity: 0.6; cursor: not-allowed; }
+.btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.65rem 1.3rem;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  font-weight: 600;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+.btn-secondary:hover { border-color: var(--brand); color: var(--brand); }
+.btn-secondary:disabled { opacity: 0.6; cursor: not-allowed; }
+.btn-saved { color: var(--accent); border-color: var(--accent); }
+.btn-sm { padding: 0.5rem 1rem; font-size: 0.85rem; }
+
+.spinner {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid rgba(255,255,255,0.4);
+  border-top-color: #fff;
+  animation: spin 0.7s linear infinite;
+}
+.spinner-dark {
+  border: 2px solid rgba(22, 32, 42, 0.2);
+  border-top-color: var(--ink);
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* CV upload */
 .cv-row {
   display: flex;
-  gap: 1rem;
+  gap: 0.8rem;
   align-items: center;
-  margin-top: 0.6rem;
+  flex-wrap: wrap;
 }
-.cv-row button {
-  padding: 0.5rem 1.2rem;
-  border-radius: 4px;
-  border: none;
-  background: #35495e;
-  color: #fff;
-  font-weight: 600;
+.file-input {
+  flex: 1;
+  min-width: 220px;
+  display: flex;
+  align-items: center;
+  padding: 0.6rem 0.9rem;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  color: var(--ink-soft);
+  font-size: 0.87rem;
   cursor: pointer;
+  background: var(--canvas);
 }
+.file-input:hover { border-color: var(--brand); }
+.file-input input { display: none; }
 .cv-result {
-  margin-top: 0.8rem;
-  color: #333;
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--line);
+}
+.cv-result-row {
+  font-size: 0.92rem;
+  margin-bottom: 0.6rem;
+}
+.skill-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 0.6rem;
+}
+.skill-tag {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-radius: 999px;
+  padding: 0.2rem 0.7rem;
+  font-size: 0.78rem;
+  font-weight: 600;
 }
 .cv-hint {
-  margin-top: 0.4rem;
-  color: #1f6f4a;
-  font-size: 0.95em;
+  color: var(--accent);
+  font-size: 0.85rem;
+  font-weight: 500;
 }
-.search-box {
-  margin-bottom: 2rem;
-}
+
+/* Search box */
 .search-row {
   display: flex;
+  gap: 0.8rem;
+}
+.search-field {
+  position: relative;
+  flex: 1;
+}
+.search-field input {
+  width: 100%;
+  padding: 0.65rem 0.9rem;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  font-family: inherit;
+  font-size: 0.92rem;
+  background: var(--surface);
+  color: var(--ink);
+}
+.search-field input:focus {
+  outline: none;
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px rgba(47, 111, 237, 0.12);
+}
+.btn-search { flex-shrink: 0; }
+.suggestions {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 10;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+  border-radius: 8px;
+  margin: 0;
+  padding: 0.3rem 0;
+  list-style: none;
+  max-height: 200px;
+  overflow-y: auto;
+}
+.suggestions li {
+  padding: 0.55rem 0.9rem;
+  cursor: pointer;
+  font-size: 0.88rem;
+  transition: background 0.1s;
+}
+.suggestions li:hover { background: var(--canvas); }
+.selected-locations {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.8rem;
+}
+.location-tag {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-radius: 999px;
+  padding: 0.25rem 0.4rem 0.25rem 0.8rem;
+  font-size: 0.83rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+.remove-tag {
+  background: none;
+  border: none;
+  color: inherit;
+  opacity: 0.6;
+  font-size: 1.1em;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 0.2rem;
+}
+.remove-tag:hover { opacity: 1; }
+
+/* Tabs */
+.tabs {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 1rem;
+  border-bottom: 1px solid var(--line);
+  flex-wrap: wrap;
+}
+.tab {
+  border: none;
+  background: none;
+  padding: 0.7rem 0.9rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--ink-soft);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.tab.active {
+  color: var(--brand);
+  border-bottom-color: var(--brand);
+}
+.tab-count {
+  background: var(--canvas);
+  border-radius: 999px;
+  padding: 0.05rem 0.5rem;
+  font-size: 0.75rem;
+}
+.sort-select {
+  margin-left: auto;
+  padding: 0.4rem 0.7rem;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 0.85rem;
+}
+
+/* Alerts */
+.alert {
+  margin: 0 0 1rem;
+  padding: 0.7rem 0.9rem;
+  border-radius: 8px;
+  font-size: 0.88rem;
+}
+.alert-error { background: var(--danger-soft); color: var(--danger); border: 1px solid var(--danger); border-opacity: 0.3; }
+.alert-notice { background: var(--accent-soft); color: var(--accent); border: 1px solid var(--accent); }
+
+/* Job list */
+.job-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
   gap: 1rem;
 }
-.search-row input {
-  padding: 0.6rem;
-  border-radius: 4px;
-  border: 1px solid #ddd;
-}
-.search-row button {
-  padding: 0.6rem 1.5rem;
-  border-radius: 4px;
-  border: none;
-  background: #35495e;
-  color: #fff;
-  font-weight: 600;
-  cursor: pointer;
-  height: 42px;
-  align-self: center;
-}
-.selected-locations-row {
-  margin-top: 0.3rem;
-}
-.job-list {
-  margin-bottom: 2rem;
-}
 .job-card {
-  background: #fff;
-  border-radius: 8px;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+  position: relative;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
   padding: 1.2rem;
-  margin-bottom: 1.2rem;
+  display: flex;
+  flex-direction: column;
+  transition: box-shadow 0.15s, transform 0.15s;
+}
+.job-card:hover {
+  box-shadow: 0 4px 20px rgba(16, 24, 40, 0.1);
+  transform: translateY(-1px);
+}
+.new-badge {
+  position: absolute;
+  top: 0.9rem;
+  right: 0.9rem;
+  background: var(--brand);
+  color: #fff;
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
 }
 .job-card-header {
   display: flex;
-  justify-content: space-between;
-  font-size: 1.1rem;
-  font-weight: 600;
+  flex-direction: column;
+  gap: 0.2rem;
+  margin-bottom: 0.6rem;
+  padding-right: 2.5rem;
+}
+.job-title {
+  font-size: 1.02rem;
+  font-weight: 700;
+  color: var(--ink);
+}
+.company {
+  color: var(--ink-soft);
+  font-size: 0.88rem;
+  font-weight: 500;
 }
 .job-card-meta {
   display: flex;
-  gap: 2rem;
-  margin: 0.5rem 0 1rem 0;
-  color: #666;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 0.7rem;
+}
+.meta-tag {
+  background: var(--canvas);
+  color: var(--ink-soft);
+  border-radius: 999px;
+  padding: 0.2rem 0.65rem;
+  font-size: 0.76rem;
+  font-weight: 600;
+}
+.meta-tag-accent {
+  background: rgba(47, 111, 237, 0.1);
+  color: var(--brand);
+  text-transform: capitalize;
 }
 .job-card-desc {
-  margin: 0.7rem 0 0.5rem 0;
-  color: #444;
-  font-size: 0.98em;
-  min-height: 1.2em;
+  color: var(--ink-soft);
+  font-size: 0.87rem;
+  line-height: 1.45;
+  margin-bottom: 1rem;
+  flex: 1;
 }
-.job-card-actions button {
-  margin-right: 0.7rem;
-  padding: 0.4rem 1.1rem;
-  border: none;
-  border-radius: 4px;
-  background: #42b883;
-  color: #fff;
-  font-weight: 500;
-  cursor: pointer;
+.job-card-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
 }
-.job-details, .dashboard {
-  background: #fff;
-  border-radius: 8px;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.04);
-  padding: 1.2rem;
-  margin-bottom: 1.2rem;
+.load-more-row {
+  display: flex;
+  justify-content: center;
+  margin-top: 1.5rem;
 }
-.dashboard ul {
-  list-style: disc;
-  margin-left: 1.5rem;
+
+/* Skeleton loading */
+.skeleton-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 1rem;
+}
+.skeleton { gap: 0.6rem; }
+.skeleton-line {
+  height: 12px;
+  border-radius: 6px;
+  background: linear-gradient(90deg, var(--canvas) 25%, var(--line) 50%, var(--canvas) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s infinite;
+}
+.w-60 { width: 60%; }
+.w-30 { width: 30%; }
+.w-90 { width: 90%; }
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* Empty state */
+.empty-state {
+  text-align: center;
+  padding: 3rem 1rem;
+  color: var(--ink-soft);
+  background: var(--surface);
+  border: 1px dashed var(--line);
+  border-radius: var(--radius);
+}
+.empty-icon { font-size: 2rem; margin-bottom: 0.6rem; }
+
+/* History table */
+.history-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+  font-size: 0.85rem;
+}
+.history-table th, .history-table td {
+  text-align: left;
+  padding: 0.6rem 0.9rem;
+  border-bottom: 1px solid var(--line);
+}
+.history-table th {
+  color: var(--ink-soft);
+  font-weight: 600;
+  background: var(--canvas);
+}
+.history-table tr:last-child td { border-bottom: none; }
+
+@media (max-width: 800px) {
+  .main-layout { flex-direction: column; padding: 0 1rem; }
+  .sidebar { width: 100%; position: static; }
+  .search-row { flex-direction: column; }
+  .history-table { display: block; overflow-x: auto; }
 }
 </style>

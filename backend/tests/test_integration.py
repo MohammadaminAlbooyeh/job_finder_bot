@@ -15,6 +15,8 @@ def test_run_all_integration(tmp_path, monkeypatch):
     os.environ["OUTPUT_PATH"] = str(out_json)
     os.environ["PERSISTENCE"] = "csv"
     os.environ["PERSISTENCE_CSV_PATH"] = str(tmp_path / "out.csv")
+    os.environ["STATE_PATH"] = str(tmp_path / "seen.json")
+    os.environ["HISTORY_PATH"] = str(tmp_path / "history.json")
 
     results = run_all(query="q", location="l", num_pages=1, enable_email=False, enable_telegram=False)
     assert isinstance(results, list)
@@ -28,3 +30,5 @@ def test_run_all_integration(tmp_path, monkeypatch):
     os.environ.pop("OUTPUT_PATH", None)
     os.environ.pop("PERSISTENCE", None)
     os.environ.pop("PERSISTENCE_CSV_PATH", None)
+    os.environ.pop("STATE_PATH", None)
+    os.environ.pop("HISTORY_PATH", None)
