@@ -4,16 +4,12 @@ from main import run_all
 
 
 def test_run_all_integration(tmp_path, monkeypatch):
-    # mock scrapers to return deterministic data
-    def mock_linkedin(query, location, num_pages):
+    # mock scraper to return deterministic data
+    def mock_linkedin(query, location, num_pages, job_type=None, date_posted=None):
         return [{"source": "linkedin", "title": "L1", "company": "X", "location": "Remote", "url": "u1", "summary": "s1"}]
 
-    def mock_indeed(query, location, num_pages):
-        return [{"source": "indeed", "title": "I1", "company": "Y", "location": "Remote", "url": "u2", "summary": "s2"}]
-
-    # patch the functions that `main` actually calls (they are imported there)
+    # patch the function that `main` actually calls (it is imported there)
     monkeypatch.setattr("main.scrape_linkedin", mock_linkedin)
-    monkeypatch.setattr("main.scrape_indeed", mock_indeed)
 
     out_json = tmp_path / "out.json"
     os.environ["OUTPUT_PATH"] = str(out_json)

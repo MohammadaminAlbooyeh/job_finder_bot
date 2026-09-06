@@ -7,15 +7,21 @@ import { ref } from 'vue'
 const searchTitle = ref('')
 const searchLocation = ref('')
 const selectedLocations = ref([])
+const jobType = ref('')
+const datePosted = ref('')
 const jobs = ref([])
 const loading = ref(false)
 const error = ref('')
 const notice = ref('')
 
-// Demo city and job title lists, can be replaced with API
+// Demo country/city and job title lists, can be replaced with API
+const countryList = [
+  'Italy', 'Remote', 'United States', 'United Kingdom', 'Germany', 'France', 'Spain', 'Netherlands', 'Switzerland', 'Portugal', 'Ireland', 'Sweden', 'Canada', 'United Arab Emirates', 'India', 'Poland', 'Austria', 'Belgium', 'Turkey', 'Greece'
+]
 const cityList = [
   'Milan', 'Turin', 'Rome', 'Naples', 'Florence', 'Venice', 'Bologna', 'Genoa', 'Palermo', 'Bari', 'Catania', 'Verona', 'Padua', 'Trieste', 'Brescia', 'Parma', 'Prato', 'Modena', 'Reggio Calabria', 'Reggio Emilia', 'Perugia', 'Livorno', 'Ravenna', 'Cagliari', 'Foggia', 'Rimini', 'Salerno', 'Ferrara', 'Sassari', 'Latina', 'Giugliano in Campania', 'Monza', 'Siracusa', 'Pescara', 'Bergamo', 'Forlì', 'Trento', 'Vicenza', 'Terni', 'Bolzano', 'Novara', 'Piacenza', 'Ancona', 'Andria', 'Udine', 'Arezzo', 'Cesena', 'Lecce', 'Barletta', 'Alessandria', 'La Spezia'
 ]
+const locationList = [...countryList, ...cityList]
 const jobTitleList = [
   'Frontend Developer', 'Backend Developer', 'Full Stack Developer', 'Data Scientist', 'Machine Learning Engineer', 'DevOps Engineer', 'QA Engineer', 'Product Manager', 'UI/UX Designer', 'Mobile Developer', 'Project Manager', 'Business Analyst', 'System Administrator', 'Cloud Engineer', 'Security Engineer', 'Database Administrator', 'Network Engineer', 'Scrum Master', 'Software Architect', 'Web Developer', 'React Developer', 'Vue Developer', 'Angular Developer', 'Python Developer', 'Java Developer', 'C# Developer', 'PHP Developer', 'Ruby Developer', 'Go Developer', 'iOS Developer', 'Android Developer', 'Flutter Developer', 'Node.js Developer', 'TypeScript Developer', 'Scala Developer', 'Rust Developer', 'Game Developer', 'Embedded Engineer', 'Support Engineer', 'Technical Writer', 'IT Consultant', 'AI Engineer', 'Research Scientist', 'Solutions Architect', 'Test Automation Engineer', 'Release Manager', 'Site Reliability Engineer', 'Hardware Engineer', 'SAP Consultant', 'ERP Specialist', 'Help Desk Specialist'
 ]
@@ -32,7 +38,7 @@ function updateCitySuggestions() {
     return
   }
   // Exclude already selected locations
-  citySuggestions.value = cityList.filter(city => city.toLowerCase().startsWith(val) && !selectedLocations.value.includes(city)).slice(0, 6)
+  citySuggestions.value = locationList.filter(loc => loc.toLowerCase().startsWith(val) && !selectedLocations.value.includes(loc)).slice(0, 6)
   showCitySuggestions.value = citySuggestions.value.length > 0
 }
 
@@ -92,10 +98,12 @@ async function searchJobs() {
       ? [...selectedLocations.value]
       : [searchLocation.value.trim() || 'remote']
 
+    const extraParams = `${jobType.value ? `&job_type=${encodeURIComponent(jobType.value)}` : ''}${datePosted.value ? `&date_posted=${encodeURIComponent(datePosted.value)}` : ''}`
+
     const responses = await Promise.all(
       locations.map(async (loc) => {
         const res = await fetch(
-          `${apiUrl}/run?query=${encodeURIComponent(finalQuery)}&location=${encodeURIComponent(loc)}`
+          `${apiUrl}/run?query=${encodeURIComponent(finalQuery)}&location=${encodeURIComponent(loc)}${extraParams}`
         )
 
         if (!res.ok) {
@@ -121,7 +129,7 @@ async function searchJobs() {
 
     if (deduped.length === 0 && !locations.some((loc) => loc.toLowerCase() === 'remote')) {
       const fallbackRes = await fetch(
-        `${apiUrl}/run?query=${encodeURIComponent(finalQuery)}&location=${encodeURIComponent('remote')}`
+        `${apiUrl}/run?query=${encodeURIComponent(finalQuery)}&location=${encodeURIComponent('remote')}${extraParams}`
       )
 
       if (fallbackRes.ok) {
@@ -182,44 +190,27 @@ function saveJob(job) {
       <aside class="sidebar">
         <h3>Filters</h3>
         <div class="filter-group">
-          <label>Work Arrangement</label>
-          <select>
-            <option>All</option>
-            <option>Remote</option>
-            <option>In-person</option>
-            <option>Hybrid</option>
-          </select>
-        </div>
-        <div class="filter-group">
           <label>Job Type</label>
-          <select>
-            <option>All</option>
-            <option>Full-time</option>
-            <option>Part-time</option>
-            <option>Internship</option>
+          <select v-model="jobType">
+            <option value="">All</option>
+            <option value="remote">Remote</option>
+            <option value="onsite">On-site</option>
+            <option value="hybrid">Hybrid</option>
           </select>
-        </div>
-        <div class="filter-group">
-          <label>Experience Level</label>
-          <select>
-            <option>All</option>
-            <option>Junior</option>
-            <option>Mid</option>
-            <option>Senior</option>
-          </select>
-        </div>
-        <div class="filter-group">
-          <label>Salary Range</label>
-          <input type="text" placeholder="e.g. 1000-2000" />
         </div>
         <div class="filter-group">
           <label>Date Posted</label>
-          <select>
-            <option>Anytime</option>
-            <option>Last 24 hours</option>
-            <option>Last 7 days</option>
-            <option>Last 30 days</option>
+          <select v-model="datePosted">
+            <option value="">Anytime</option>
+            <option value="24h">Last 24 hours</option>
+            <option value="3d">Last 3 days</option>
+            <option value="week">Last 7 days</option>
           </select>
+        </div>
+        <div class="filter-group">
+          <a :href="`${getApiBaseUrl()}/download/csv`" target="_blank" rel="noopener">
+            <button style="width:100%;">Download CSV</button>
+          </a>
         </div>
       </aside>
 
@@ -292,7 +283,8 @@ function saveJob(job) {
             </div>
             <div class="job-card-meta">
               <span class="location">{{ job.location }}</span>
-              <span v-if="job.salary" class="salary">{{ job.salary }}</span>
+              <span v-if="job.job_type" class="job-type">{{ job.job_type }}</span>
+              <span v-if="job.posted_date" class="posted-date">{{ job.posted_date }}</span>
             </div>
             <div class="job-card-desc">
               {{ job.description ? job.description.slice(0, 120) + (job.description.length > 120 ? '...' : '') : '' }}

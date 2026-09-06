@@ -7,8 +7,4 @@ webdriver-manager
 undetected-chromedriver
 fastapi
 uvicorn[standard]
-selenium
-webdriver-manager
-undetected-chromedriver
-fastapi
-uvicorn[standard]
+apscheduler

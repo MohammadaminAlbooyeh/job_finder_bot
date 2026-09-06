@@ -129,15 +129,51 @@ def _get_soup(url: str, max_retries: int = 3, proxies: dict | None = None):
     raise RuntimeError(f"Unable to fetch page after {max_retries} retries: {url}")
 
 
-def scrape_linkedin(query: str = "software engineer", location: str = "remote", num_pages: int = 1, proxies: dict | None = None):
+# LinkedIn's "workplace type" filter values (f_WT).
+JOB_TYPE_CODES = {
+    "onsite": "1",
+    "on-site": "1",
+    "remote": "2",
+    "hybrid": "3",
+}
+
+# LinkedIn's "date posted" filter values (f_TPR), in seconds.
+DATE_POSTED_CODES = {
+    "24h": "r86400",
+    "1d": "r86400",
+    "3d": "r259200",
+    "3days": "r259200",
+    "week": "r604800",
+    "7d": "r604800",
+}
+
+
+def scrape_linkedin(
+    query: str = "software engineer",
+    location: str = "remote",
+    num_pages: int = 1,
+    proxies: dict | None = None,
+    job_type: str | None = None,
+    date_posted: str | None = None,
+):
     """Scrape job cards from LinkedIn search results.
 
     - Supports optional `proxies` dict or `HTTP_PROXY`/`HTTPS_PROXY` env vars.
     - Uses rotating user agents, backoff and simple CAPTCHA detection.
+    - `job_type`: one of "remote", "hybrid", "onsite" (maps to LinkedIn's f_WT filter).
+    - `date_posted`: one of "24h", "3d", "week" (maps to LinkedIn's f_TPR filter).
     """
     jobs = []
     query_encoded = urllib.parse.quote_plus(query)
     location_encoded = urllib.parse.quote_plus(location)
+
+    extra_params = ""
+    wt_code = JOB_TYPE_CODES.get((job_type or "").strip().lower())
+    if wt_code:
+        extra_params += f"&f_WT={wt_code}"
+    tpr_code = DATE_POSTED_CODES.get((date_posted or "").strip().lower())
+    if tpr_code:
+        extra_params += f"&f_TPR={tpr_code}"
 
     for page in range(num_pages):
         start = page * 25
@@ -145,7 +181,7 @@ def scrape_linkedin(query: str = "software engineer", location: str = "remote", 
         # LinkedIn guest endpoint is usually more stable to scrape than the full search page.
         api_url = (
             "https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search"
-            f"?keywords={query_encoded}&location={location_encoded}&start={start}"
+            f"?keywords={query_encoded}&location={location_encoded}&start={start}{extra_params}"
         )
 
         soup = _get_soup(api_url, proxies=proxies)
@@ -154,7 +190,7 @@ def scrape_linkedin(query: str = "software engineer", location: str = "remote", 
             # Fallback to the legacy search page selectors.
             fallback_url = (
                 "https://www.linkedin.com/jobs/search/"
-                f"?keywords={query_encoded}&location={location_encoded}&start={start}"
+                f"?keywords={query_encoded}&location={location_encoded}&start={start}{extra_params}"
             )
             soup = _get_soup(fallback_url, proxies=proxies)
             cards = soup.select("ul.jobs-search__results-list li")
@@ -175,6 +211,11 @@ def scrape_linkedin(query: str = "software engineer", location: str = "remote", 
             snippet_el = card.select_one("p.job-search-card__snippet")
             summary = snippet_el.get_text(strip=True) if snippet_el else ""
 
+            date_el = card.select_one("time.job-search-card__listdate") or card.select_one("time")
+            posted_date = ""
+            if date_el:
+                posted_date = date_el.get("datetime") or date_el.get_text(strip=True)
+
             if not title and not company and not url_job:
                 continue
 
@@ -186,6 +227,8 @@ def scrape_linkedin(query: str = "software engineer", location: str = "remote", 
                     "location": job_location,
                     "url": url_job,
                     "summary": summary,
+                    "posted_date": posted_date,
+                    "job_type": job_type or "",
                 }
             )
 
