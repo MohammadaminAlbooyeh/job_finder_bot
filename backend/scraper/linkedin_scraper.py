@@ -5,6 +5,7 @@ import urllib.parse
 
 import time
 import random
+import re
 import os
 import requests
 from bs4 import BeautifulSoup
@@ -232,6 +233,23 @@ def scrape_linkedin(
             if date_el:
                 posted_date = date_el.get("datetime") or date_el.get_text(strip=True)
 
+            # Best-effort detection: LinkedIn cards mention "Easy Apply" in their
+            # text when the job supports one-click applying through LinkedIn itself.
+            card_text = card.get_text(" ", strip=True)
+            easy_apply = "easy apply" in card_text.lower()
+
+            salary_el = card.select_one("span.job-search-card__salary-info")
+            if salary_el:
+                salary = " ".join(salary_el.get_text(" ", strip=True).split())
+            else:
+                # Not every card carries a dedicated salary element — fall back to
+                # spotting a currency-prefixed number range/figure in the card text.
+                salary_match = re.search(
+                    r"(?:[€£$]\s?\d[\d,.]*\s?(?:K|k)?(?:\s?[-–]\s?[€£$]?\s?\d[\d,.]*\s?(?:K|k)?)?(?:\s?/\s?(?:yr|year|hr|hour|mo|month))?)",
+                    card_text,
+                )
+                salary = salary_match.group(0).strip() if salary_match else ""
+
             if not title and not company and not url_job:
                 continue
 
@@ -246,6 +264,8 @@ def scrape_linkedin(
                     "posted_date": posted_date,
                     "job_type": job_type or "",
                     "experience_level": experience_level or "",
+                    "easy_apply": easy_apply,
+                    "salary": salary,
                 }
             )
 

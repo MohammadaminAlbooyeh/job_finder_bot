@@ -1,7 +1,7 @@
 
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 
 const searchTitle = ref('')
 const searchLocation = ref('')
@@ -19,6 +19,11 @@ const experienceLevelOptions = [
   { value: 'director', label: 'Director' },
 ]
 const selectedExperienceLevels = ref([])
+const applyTypeOptions = [
+  { value: 'easy', label: 'Easy Apply' },
+  { value: 'regular', label: 'Regular Apply' },
+]
+const selectedApplyTypes = ref([])
 const datePosted = ref('')
 const includeKeywords = ref('')
 const excludeKeywords = ref('')
@@ -127,6 +132,14 @@ function toggleExperienceLevel(value) {
     selectedExperienceLevels.value = selectedExperienceLevels.value.filter(v => v !== value)
   } else {
     selectedExperienceLevels.value = [...selectedExperienceLevels.value, value]
+  }
+}
+
+function toggleApplyType(value) {
+  if (selectedApplyTypes.value.includes(value)) {
+    selectedApplyTypes.value = selectedApplyTypes.value.filter(v => v !== value)
+  } else {
+    selectedApplyTypes.value = [...selectedApplyTypes.value, value]
   }
 }
 
@@ -296,7 +309,7 @@ async function searchJobs() {
     const newCount = deduped.filter(j => j.is_new).length
     maybeNotifyNewJobs(newCount, queries[0])
     fetchStatus()
-    exportResultsToBackend(deduped)
+    exportResultsToBackend(sortedJobs.value)
   } catch (e) {
     const rawMessage = e?.message || 'Error fetching jobs'
     const normalizedMessage = rawMessage.toLowerCase()
@@ -321,7 +334,7 @@ async function loadMore() {
     const merged = await fetchJobsForLocations(apiUrl, queries, locations, numPages.value)
     const combined = dedupeJobs([...jobs.value, ...merged])
     jobs.value = combined
-    exportResultsToBackend(combined)
+    exportResultsToBackend(sortedJobs.value)
     showToast(`Loaded page ${numPages.value}`, 'success')
   } catch (e) {
     showToast(e?.message || 'Could not load more jobs', 'error')
@@ -333,6 +346,7 @@ async function loadMore() {
 function clearFilters() {
   selectedJobTypes.value = []
   selectedExperienceLevels.value = []
+  selectedApplyTypes.value = []
   datePosted.value = ''
   includeKeywords.value = ''
   excludeKeywords.value = ''
@@ -343,7 +357,14 @@ function clearFilters() {
 }
 
 const sortedJobs = computed(() => {
-  const list = [...jobs.value]
+  let list = [...jobs.value]
+
+  if (selectedApplyTypes.value.length > 0) {
+    const wantEasy = selectedApplyTypes.value.includes('easy')
+    const wantRegular = selectedApplyTypes.value.includes('regular')
+    list = list.filter(j => (j.easy_apply ? wantEasy : wantRegular))
+  }
+
   if (sortBy.value === 'title') {
     return list.sort((a, b) => (a.title || '').localeCompare(b.title || ''))
   }
@@ -351,6 +372,11 @@ const sortedJobs = computed(() => {
     return list.sort((a, b) => (b.is_new === a.is_new) ? 0 : (b.is_new ? 1 : -1))
   }
   return list
+})
+
+// Keep the downloadable CSV/HTML in sync whenever the apply-type filter changes results.
+watch(selectedApplyTypes, () => {
+  if (jobs.value.length > 0) exportResultsToBackend(sortedJobs.value)
 })
 
 function onCvFileSelected(event) {
@@ -637,6 +663,19 @@ onUnmounted(() => {
           </div>
         </div>
         <div class="filter-group">
+          <label>Apply Type</label>
+          <div class="checkbox-group">
+            <label v-for="opt in applyTypeOptions" :key="opt.value" class="checkbox-option">
+              <input
+                type="checkbox"
+                :checked="selectedApplyTypes.includes(opt.value)"
+                @change="toggleApplyType(opt.value)"
+              />
+              {{ opt.label }}
+            </label>
+          </div>
+        </div>
+        <div class="filter-group">
           <label>Date Posted</label>
           <select v-model="datePosted">
             <option value="">Anytime</option>
@@ -801,6 +840,8 @@ onUnmounted(() => {
                   <span v-if="job.job_type" class="meta-tag meta-tag-accent">{{ job.job_type }}</span>
                   <span v-if="job.experience_level" class="meta-tag">{{ job.experience_level }}</span>
                   <span v-if="job.posted_date" class="meta-tag">{{ job.posted_date }}</span>
+                  <span class="meta-tag" :class="job.easy_apply ? 'meta-tag-easy' : ''">{{ job.easy_apply ? '⚡ Easy Apply' : 'Regular Apply' }}</span>
+                  <span v-if="job.salary" class="meta-tag meta-tag-salary">💰 {{ job.salary }}</span>
                 </div>
                 <div v-if="job.summary" class="job-card-desc" v-html="highlightSummary(job.summary.slice(0, 140) + (job.summary.length > 140 ? '…' : ''))"></div>
                 <div class="job-card-actions" @click.stop>
@@ -897,6 +938,8 @@ onUnmounted(() => {
           <span v-if="selectedJob.job_type" class="meta-tag meta-tag-accent">{{ selectedJob.job_type }}</span>
           <span v-if="selectedJob.experience_level" class="meta-tag">{{ selectedJob.experience_level }}</span>
           <span v-if="selectedJob.posted_date" class="meta-tag">{{ selectedJob.posted_date }}</span>
+          <span class="meta-tag" :class="selectedJob.easy_apply ? 'meta-tag-easy' : ''">{{ selectedJob.easy_apply ? '⚡ Easy Apply' : 'Regular Apply' }}</span>
+          <span v-if="selectedJob.salary" class="meta-tag meta-tag-salary">💰 {{ selectedJob.salary }}</span>
         </div>
         <div v-if="selectedJob.summary" class="modal-desc" v-html="highlightSummary(selectedJob.summary)"></div>
         <div class="job-card-actions">
@@ -1493,6 +1536,15 @@ body { background: var(--canvas); }
   background: rgba(47, 111, 237, 0.1);
   color: var(--brand);
   text-transform: capitalize;
+}
+.meta-tag-easy {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.meta-tag-salary {
+  background: rgba(18, 168, 148, 0.12);
+  color: var(--accent);
+  font-weight: 700;
 }
 .job-card-desc {
   color: var(--ink-soft);

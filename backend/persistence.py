@@ -14,15 +14,16 @@ def save_to_html(jobs: List[Dict], path: str):
         company = html.escape(job.get("company", ""))
         location = html.escape(job.get("location", ""))
         job_type = html.escape(job.get("job_type", ""))
+        salary = html.escape(job.get("salary", "") or "—")
         posted_date = html.escape(job.get("posted_date", ""))
         url = html.escape(job.get("url", ""), quote=True)
         apply_cell = f'<a class="apply" href="{url}" target="_blank" rel="noopener">Apply</a>' if url else ""
         rows.append(
             f"<tr><td>{title}</td><td>{company}</td><td>{location}</td>"
-            f"<td>{job_type}</td><td>{posted_date}</td><td>{apply_cell}</td></tr>"
+            f"<td>{job_type}</td><td>{salary}</td><td>{posted_date}</td><td>{apply_cell}</td></tr>"
         )
 
-    table_rows = "\n".join(rows) if rows else '<tr><td colspan="6">No jobs found.</td></tr>'
+    table_rows = "\n".join(rows) if rows else '<tr><td colspan="7">No jobs found.</td></tr>'
 
     doc = f"""<!doctype html>
 <html lang="en">
@@ -42,7 +43,7 @@ def save_to_html(jobs: List[Dict], path: str):
 <body>
 <h1>Job Finder Results ({len(jobs)} jobs)</h1>
 <table>
-<thead><tr><th>Title</th><th>Company</th><th>Location</th><th>Job Type</th><th>Posted</th><th>Link</th></tr></thead>
+<thead><tr><th>Title</th><th>Company</th><th>Location</th><th>Job Type</th><th>Salary</th><th>Posted</th><th>Link</th></tr></thead>
 <tbody>
 {table_rows}
 </tbody>
