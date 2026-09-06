@@ -61,13 +61,14 @@ def _save_history(history):
         json.dump(history[-HISTORY_LIMIT:], f, ensure_ascii=False, indent=2)
 
 
-def _record_run(query, location, job_type, date_posted, total, new_count, triggered_by):
+def _record_run(query, location, job_type, date_posted, experience_level, total, new_count, triggered_by):
     entry = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "query": query,
         "location": location,
         "job_type": job_type,
         "date_posted": date_posted,
+        "experience_level": experience_level,
         "total": total,
         "new_count": new_count,
         "triggered_by": triggered_by,
@@ -129,6 +130,7 @@ def run_jobs(
     num_pages: int = 1,
     job_type: str = "",
     date_posted: str = "",
+    experience_level: str = "",
     include_keywords: str = "",
     exclude_keywords: str = "",
 ):
@@ -138,6 +140,7 @@ def run_jobs(
         "num_pages": num_pages,
         "job_type": job_type or None,
         "date_posted": date_posted or None,
+        "experience_level": experience_level or None,
         "include_keywords": include_keywords or None,
         "exclude_keywords": exclude_keywords or None,
     }
@@ -147,6 +150,7 @@ def run_jobs(
         num_pages=num_pages,
         job_type=job_type or None,
         date_posted=date_posted or None,
+        experience_level=experience_level or None,
         include_keywords=[k.strip() for k in include_keywords.split(",") if k.strip()] or None,
         exclude_keywords=[k.strip() for k in exclude_keywords.split(",") if k.strip()] or None,
         triggered_by="manual",
@@ -191,6 +195,7 @@ def run_all(
     enable_telegram=False,
     job_type=None,
     date_posted=None,
+    experience_level=None,
     triggered_by="manual",
 ):
     print("Scraping LinkedIn...")
@@ -201,6 +206,7 @@ def run_all(
             num_pages=num_pages,
             job_type=job_type,
             date_posted=date_posted,
+            experience_level=experience_level,
         )
     except Exception as e:
         print("LinkedIn scraping failed:", e)
@@ -280,6 +286,7 @@ def run_all(
         location=location,
         job_type=job_type,
         date_posted=date_posted,
+        experience_level=experience_level,
         total=len(filtered_jobs),
         new_count=len(new_jobs),
         triggered_by=triggered_by,
@@ -301,6 +308,7 @@ def scheduled_run(triggered_by="scheduler"):
         num_pages=params.get("num_pages", int(os.getenv("JOB_PAGES", "1"))),
         job_type=params.get("job_type"),
         date_posted=params.get("date_posted"),
+        experience_level=params.get("experience_level"),
         include_keywords=[k.strip() for k in include_keywords.split(",") if k.strip()] if include_keywords else None,
         exclude_keywords=[k.strip() for k in exclude_keywords.split(",") if k.strip()] if exclude_keywords else None,
         enable_email=os.getenv("ENABLE_EMAIL", "false").lower() in ("true", "1", "yes"),
@@ -321,5 +329,6 @@ if __name__ == "__main__":
         enable_telegram=os.getenv("ENABLE_TELEGRAM", "false").lower() in ("true", "1", "yes"),
         job_type=os.getenv("JOB_TYPE") or None,
         date_posted=os.getenv("DATE_POSTED") or None,
+        experience_level=os.getenv("EXPERIENCE_LEVEL") or None,
         triggered_by="cli",
     )

@@ -147,6 +147,16 @@ DATE_POSTED_CODES = {
     "7d": "r604800",
 }
 
+# LinkedIn's "experience level" filter values (f_E).
+EXPERIENCE_CODES = {
+    "internship": "1",
+    "entry": "2",
+    "associate": "3",
+    "mid-senior": "4",
+    "director": "5",
+    "executive": "6",
+}
+
 
 def scrape_linkedin(
     query: str = "software engineer",
@@ -155,6 +165,7 @@ def scrape_linkedin(
     proxies: dict | None = None,
     job_type: str | None = None,
     date_posted: str | None = None,
+    experience_level: str | None = None,
 ):
     """Scrape job cards from LinkedIn search results.
 
@@ -162,6 +173,8 @@ def scrape_linkedin(
     - Uses rotating user agents, backoff and simple CAPTCHA detection.
     - `job_type`: one of "remote", "hybrid", "onsite" (maps to LinkedIn's f_WT filter).
     - `date_posted`: one of "24h", "3d", "week" (maps to LinkedIn's f_TPR filter).
+    - `experience_level`: one of "internship", "entry", "associate", "mid-senior",
+      "director", "executive" (maps to LinkedIn's f_E filter).
     """
     jobs = []
     query_encoded = urllib.parse.quote_plus(query)
@@ -174,6 +187,9 @@ def scrape_linkedin(
     tpr_code = DATE_POSTED_CODES.get((date_posted or "").strip().lower())
     if tpr_code:
         extra_params += f"&f_TPR={tpr_code}"
+    exp_code = EXPERIENCE_CODES.get((experience_level or "").strip().lower())
+    if exp_code:
+        extra_params += f"&f_E={exp_code}"
 
     for page in range(num_pages):
         start = page * 25
@@ -229,6 +245,7 @@ def scrape_linkedin(
                     "summary": summary,
                     "posted_date": posted_date,
                     "job_type": job_type or "",
+                    "experience_level": experience_level or "",
                 }
             )
 

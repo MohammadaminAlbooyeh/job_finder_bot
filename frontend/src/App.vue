@@ -1,17 +1,31 @@
 
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 
 const searchTitle = ref('')
 const searchLocation = ref('')
 const selectedLocations = ref([])
-const jobType = ref('')
+const jobTypeOptions = [
+  { value: 'remote', label: 'Remote' },
+  { value: 'onsite', label: 'On-site' },
+  { value: 'hybrid', label: 'Hybrid' },
+]
+const selectedJobTypes = ref([])
+const experienceLevelOptions = [
+  { value: 'entry', label: 'Entry' },
+  { value: 'associate', label: 'Associate' },
+  { value: 'mid-senior', label: 'Mid-Senior' },
+  { value: 'director', label: 'Director' },
+]
+const selectedExperienceLevels = ref([])
 const datePosted = ref('')
 const includeKeywords = ref('')
 const excludeKeywords = ref('')
 const sortBy = ref('relevance')
 const numPages = ref(1)
+const selectedTitles = ref([])
+const recentSearches = ref([])
 
 const jobs = ref([])
 const loading = ref(false)
@@ -35,6 +49,8 @@ const scanStatus = ref(null)
 const runningNow = ref(false)
 const historyList = ref([])
 const historyLoading = ref(false)
+
+const selectedJob = ref(null)
 
 // Demo country/city and job title lists, can be replaced with API
 const countryList = [
@@ -87,8 +103,31 @@ function updateJobTitleSuggestions() {
 }
 
 function selectJobTitleSuggestion(title) {
-  searchTitle.value = title
+  if (!selectedTitles.value.includes(title)) {
+    selectedTitles.value.push(title)
+  }
+  searchTitle.value = ''
   showJobTitleSuggestions.value = false
+}
+
+function removeTitle(title) {
+  selectedTitles.value = selectedTitles.value.filter(t => t !== title)
+}
+
+function onTitleEnter() {
+  if (jobTitleSuggestions.value.length > 0) {
+    selectJobTitleSuggestion(jobTitleSuggestions.value[0])
+  } else {
+    searchJobs()
+  }
+}
+
+function toggleExperienceLevel(value) {
+  if (selectedExperienceLevels.value.includes(value)) {
+    selectedExperienceLevels.value = selectedExperienceLevels.value.filter(v => v !== value)
+  } else {
+    selectedExperienceLevels.value = [...selectedExperienceLevels.value, value]
+  }
 }
 
 function getApiBaseUrl() {
@@ -110,9 +149,18 @@ function jobKey(job) {
   return (job?.url || `${job?.title || ''}|${job?.company || ''}|${job?.location || ''}`).trim()
 }
 
-function buildQueryParams(pages) {
+function toggleJobType(value) {
+  if (selectedJobTypes.value.includes(value)) {
+    selectedJobTypes.value = selectedJobTypes.value.filter(v => v !== value)
+  } else {
+    selectedJobTypes.value = [...selectedJobTypes.value, value]
+  }
+}
+
+function buildQueryParams(pages, jobTypeValue, experienceValue) {
   const parts = []
-  if (jobType.value) parts.push(`job_type=${encodeURIComponent(jobType.value)}`)
+  if (jobTypeValue) parts.push(`job_type=${encodeURIComponent(jobTypeValue)}`)
+  if (experienceValue) parts.push(`experience_level=${encodeURIComponent(experienceValue)}`)
   if (datePosted.value) parts.push(`date_posted=${encodeURIComponent(datePosted.value)}`)
   if (includeKeywords.value.trim()) parts.push(`include_keywords=${encodeURIComponent(includeKeywords.value.trim())}`)
   if (excludeKeywords.value.trim()) parts.push(`exclude_keywords=${encodeURIComponent(excludeKeywords.value.trim())}`)
@@ -120,12 +168,38 @@ function buildQueryParams(pages) {
   return parts.length ? `&${parts.join('&')}` : ''
 }
 
-async function fetchJobsForLocations(apiUrl, finalQuery, locations, pages) {
-  const extraParams = buildQueryParams(pages)
+function currentQueries() {
+  return selectedTitles.value.length > 0
+    ? [...selectedTitles.value]
+    : [searchTitle.value.trim() || 'python developer']
+}
+
+function currentLocations() {
+  return selectedLocations.value.length > 0
+    ? [...selectedLocations.value]
+    : [searchLocation.value.trim() || 'remote']
+}
+
+async function fetchJobsForLocations(apiUrl, queries, locations, pages) {
+  // Fan out over every query x location x job-type x experience-level combination (OR'd together).
+  const jobTypesToQuery = selectedJobTypes.value.length > 0 ? selectedJobTypes.value : ['']
+  const experienceToQuery = selectedExperienceLevels.value.length > 0 ? selectedExperienceLevels.value : ['']
+  const combos = []
+  for (const q of queries) {
+    for (const loc of locations) {
+      for (const jt of jobTypesToQuery) {
+        for (const exp of experienceToQuery) {
+          combos.push({ q, loc, jt, exp })
+        }
+      }
+    }
+  }
+
   const responses = await Promise.all(
-    locations.map(async (loc) => {
+    combos.map(async ({ q, loc, jt, exp }) => {
+      const extraParams = buildQueryParams(pages, jt, exp)
       const res = await fetch(
-        `${apiUrl}/run?query=${encodeURIComponent(finalQuery)}&location=${encodeURIComponent(loc)}${extraParams}`
+        `${apiUrl}/run?query=${encodeURIComponent(q)}&location=${encodeURIComponent(loc)}${extraParams}`
       )
       if (!res.ok) {
         throw new Error(`API error for ${loc}: ${res.status} ${res.statusText}`)
@@ -149,6 +223,38 @@ function dedupeJobs(list) {
   return deduped
 }
 
+function recordRecentSearch(query, location) {
+  const label = `${query} · ${location}`
+  recentSearches.value = [label, ...recentSearches.value.filter(s => s !== label)].slice(0, 6)
+  try {
+    localStorage.setItem('jobfinder_recent_searches', JSON.stringify(recentSearches.value))
+  } catch {
+    // storage unavailable — ignore
+  }
+}
+
+function applyRecentSearch(label) {
+  const [query, location] = label.split(' · ')
+  selectedTitles.value = []
+  searchTitle.value = query || ''
+  selectedLocations.value = []
+  searchLocation.value = location || ''
+  searchJobs()
+}
+
+function maybeNotifyNewJobs(newCount, query) {
+  if (!newCount || typeof Notification === 'undefined') return
+  if (Notification.permission === 'granted') {
+    new Notification('Job Finder', { body: `${newCount} new "${query}" job(s) found` })
+  } else if (Notification.permission !== 'denied') {
+    Notification.requestPermission().then(perm => {
+      if (perm === 'granted') {
+        new Notification('Job Finder', { body: `${newCount} new "${query}" job(s) found` })
+      }
+    })
+  }
+}
+
 async function searchJobs() {
   loading.value = true
   error.value = ''
@@ -159,16 +265,14 @@ async function searchJobs() {
 
   try {
     const apiUrl = getApiBaseUrl()
-    const finalQuery = searchTitle.value.trim() || 'python developer'
-    const locations = selectedLocations.value.length > 0
-      ? [...selectedLocations.value]
-      : [searchLocation.value.trim() || 'remote']
+    const queries = currentQueries()
+    const locations = currentLocations()
 
-    let merged = await fetchJobsForLocations(apiUrl, finalQuery, locations, numPages.value)
+    let merged = await fetchJobsForLocations(apiUrl, queries, locations, numPages.value)
     let deduped = dedupeJobs(merged)
 
     if (deduped.length === 0 && !locations.some((loc) => loc.toLowerCase() === 'remote')) {
-      const fallbackJobs = await fetchJobsForLocations(apiUrl, finalQuery, ['remote'], numPages.value)
+      const fallbackJobs = await fetchJobsForLocations(apiUrl, queries, ['remote'], numPages.value)
       deduped = dedupeJobs(fallbackJobs)
       if (deduped.length > 0) {
         notice.value = 'No exact matches for selected locations. Showing remote results.'
@@ -176,6 +280,9 @@ async function searchJobs() {
     }
 
     jobs.value = deduped
+    recordRecentSearch(queries[0], locations[0])
+    const newCount = deduped.filter(j => j.is_new).length
+    maybeNotifyNewJobs(newCount, queries[0])
     fetchStatus()
   } catch (e) {
     const rawMessage = e?.message || 'Error fetching jobs'
@@ -194,13 +301,11 @@ async function loadMore() {
   loadingMore.value = true
   try {
     const apiUrl = getApiBaseUrl()
-    const finalQuery = searchTitle.value.trim() || 'python developer'
-    const locations = selectedLocations.value.length > 0
-      ? [...selectedLocations.value]
-      : [searchLocation.value.trim() || 'remote']
+    const queries = currentQueries()
+    const locations = currentLocations()
 
     numPages.value += 1
-    const merged = await fetchJobsForLocations(apiUrl, finalQuery, locations, numPages.value)
+    const merged = await fetchJobsForLocations(apiUrl, queries, locations, numPages.value)
     jobs.value = dedupeJobs([...jobs.value, ...merged])
     showToast(`Loaded page ${numPages.value}`, 'success')
   } catch (e) {
@@ -211,12 +316,14 @@ async function loadMore() {
 }
 
 function clearFilters() {
-  jobType.value = ''
+  selectedJobTypes.value = []
+  selectedExperienceLevels.value = []
   datePosted.value = ''
   includeKeywords.value = ''
   excludeKeywords.value = ''
   selectedLocations.value = []
   searchLocation.value = ''
+  selectedTitles.value = []
   showToast('Filters cleared', 'success')
 }
 
@@ -319,6 +426,49 @@ function copyLink(job) {
     .catch(() => showToast('Could not copy link', 'error'))
 }
 
+function escapeHtml(str) {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+}
+
+function highlightSummary(text) {
+  if (!text) return ''
+  const escaped = escapeHtml(text)
+  const keywords = includeKeywords.value.split(',').map(k => k.trim()).filter(Boolean)
+  if (keywords.length === 0) return escaped
+  const pattern = new RegExp(`(${keywords.map(k => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})`, 'ig')
+  return escaped.replace(pattern, '<mark>$1</mark>')
+}
+
+function openJobDetails(job) {
+  selectedJob.value = job
+}
+
+function closeJobDetails() {
+  selectedJob.value = null
+}
+
+function exportSavedCsv() {
+  if (savedJobs.value.length === 0) {
+    showToast('No saved jobs to export', 'error')
+    return
+  }
+  const columns = ['title', 'company', 'location', 'job_type', 'posted_date', 'url']
+  const rows = [columns.join(',')]
+  for (const job of savedJobs.value) {
+    rows.push(columns.map(col => `"${String(job[col] || '').replace(/"/g, '""')}"`).join(','))
+  }
+  const blob = new Blob([rows.join('\n')], { type: 'text/csv;charset=utf-8;' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = 'saved_jobs.csv'
+  link.click()
+  URL.revokeObjectURL(url)
+}
+
 // --- Theme ---
 function applyTheme() {
   document.documentElement.setAttribute('data-theme', theme.value)
@@ -390,6 +540,12 @@ onMounted(() => {
   const storedTheme = localStorage.getItem('jobfinder_theme')
   if (storedTheme) theme.value = storedTheme
   applyTheme()
+  try {
+    const raw = localStorage.getItem('jobfinder_recent_searches')
+    recentSearches.value = raw ? JSON.parse(raw) : []
+  } catch {
+    recentSearches.value = []
+  }
   fetchStatus()
   statusTimer = setInterval(fetchStatus, 60000)
 })
@@ -441,12 +597,29 @@ onUnmounted(() => {
         <h3>Filters</h3>
         <div class="filter-group">
           <label>Job Type</label>
-          <select v-model="jobType">
-            <option value="">All</option>
-            <option value="remote">Remote</option>
-            <option value="onsite">On-site</option>
-            <option value="hybrid">Hybrid</option>
-          </select>
+          <div class="checkbox-group">
+            <label v-for="opt in jobTypeOptions" :key="opt.value" class="checkbox-option">
+              <input
+                type="checkbox"
+                :checked="selectedJobTypes.includes(opt.value)"
+                @change="toggleJobType(opt.value)"
+              />
+              {{ opt.label }}
+            </label>
+          </div>
+        </div>
+        <div class="filter-group">
+          <label>Experience Level</label>
+          <div class="checkbox-group">
+            <label v-for="opt in experienceLevelOptions" :key="opt.value" class="checkbox-option">
+              <input
+                type="checkbox"
+                :checked="selectedExperienceLevels.includes(opt.value)"
+                @change="toggleExperienceLevel(opt.value)"
+              />
+              {{ opt.label }}
+            </label>
+          </div>
         </div>
         <div class="filter-group">
           <label>Date Posted</label>
@@ -509,8 +682,8 @@ onUnmounted(() => {
               <input
                 v-model="searchTitle"
                 type="text"
-                placeholder="Job title or keyword"
-                @keyup.enter="searchJobs"
+                placeholder="Job title or keyword (Enter adds another)"
+                @keyup.enter="onTitleEnter"
                 @input="updateJobTitleSuggestions"
                 @focus="updateJobTitleSuggestions"
                 @blur="setTimeout(() => showJobTitleSuggestions = false, 120)"
@@ -544,11 +717,19 @@ onUnmounted(() => {
               {{ loading ? 'Searching…' : 'Search' }}
             </button>
           </div>
-          <div v-if="selectedLocations.length" class="selected-locations">
+          <div v-if="selectedTitles.length || selectedLocations.length" class="selected-locations">
+            <span v-for="title in selectedTitles" :key="title" class="location-tag">
+              {{ title }}
+              <button class="remove-tag" @click.prevent="removeTitle(title)">&times;</button>
+            </span>
             <span v-for="city in selectedLocations" :key="city" class="location-tag">
               {{ city }}
               <button class="remove-tag" @click.prevent="removeLocation(city)">&times;</button>
             </span>
+          </div>
+          <div v-if="recentSearches.length" class="recent-searches">
+            <span class="recent-label">Recent:</span>
+            <button v-for="s in recentSearches" :key="s" class="recent-chip" @click="applyRecentSearch(s)">{{ s }}</button>
           </div>
         </section>
 
@@ -590,7 +771,7 @@ onUnmounted(() => {
 
           <template v-else>
             <div class="job-grid">
-              <div v-for="job in sortedJobs" :key="jobKey(job)" class="job-card">
+              <div v-for="job in sortedJobs" :key="jobKey(job)" class="job-card" @click="openJobDetails(job)">
                 <span v-if="job.is_new" class="new-badge">New</span>
                 <div class="job-card-header">
                   <span class="job-title">{{ job.title }}</span>
@@ -599,12 +780,11 @@ onUnmounted(() => {
                 <div class="job-card-meta">
                   <span v-if="job.location" class="meta-tag">📍 {{ job.location }}</span>
                   <span v-if="job.job_type" class="meta-tag meta-tag-accent">{{ job.job_type }}</span>
+                  <span v-if="job.experience_level" class="meta-tag">{{ job.experience_level }}</span>
                   <span v-if="job.posted_date" class="meta-tag">{{ job.posted_date }}</span>
                 </div>
-                <div v-if="job.summary" class="job-card-desc">
-                  {{ job.summary.slice(0, 140) }}{{ job.summary.length > 140 ? '…' : '' }}
-                </div>
-                <div class="job-card-actions">
+                <div v-if="job.summary" class="job-card-desc" v-html="highlightSummary(job.summary.slice(0, 140) + (job.summary.length > 140 ? '…' : ''))"></div>
+                <div class="job-card-actions" @click.stop>
                   <a v-if="job.url" :href="job.url" target="_blank" rel="noopener" class="btn-primary btn-sm">Apply on LinkedIn</a>
                   <button class="btn-secondary btn-sm" @click="copyLink(job)" title="Copy link">🔗</button>
                   <button class="btn-secondary btn-sm" :class="{ 'btn-saved': isSaved(job) }" @click="saveJob(job)">
@@ -628,23 +808,28 @@ onUnmounted(() => {
             <div class="empty-icon">⭐</div>
             <p>No saved jobs yet. Click "Save" on any job to keep it here.</p>
           </div>
-          <div v-else class="job-grid">
-            <div v-for="job in savedJobs" :key="jobKey(job)" class="job-card">
-              <div class="job-card-header">
-                <span class="job-title">{{ job.title }}</span>
-                <span class="company">{{ job.company }}</span>
-              </div>
-              <div class="job-card-meta">
-                <span v-if="job.location" class="meta-tag">📍 {{ job.location }}</span>
-                <span v-if="job.job_type" class="meta-tag meta-tag-accent">{{ job.job_type }}</span>
-              </div>
-              <div class="job-card-actions">
-                <a v-if="job.url" :href="job.url" target="_blank" rel="noopener" class="btn-primary btn-sm">Apply on LinkedIn</a>
-                <button class="btn-secondary btn-sm" @click="copyLink(job)" title="Copy link">🔗</button>
-                <button class="btn-secondary btn-sm btn-saved" @click="saveJob(job)">Remove</button>
+          <template v-else>
+            <div class="saved-toolbar">
+              <button class="btn-secondary btn-sm" @click="exportSavedCsv">Export to CSV</button>
+            </div>
+            <div class="job-grid">
+              <div v-for="job in savedJobs" :key="jobKey(job)" class="job-card" @click="openJobDetails(job)">
+                <div class="job-card-header">
+                  <span class="job-title">{{ job.title }}</span>
+                  <span class="company">{{ job.company }}</span>
+                </div>
+                <div class="job-card-meta">
+                  <span v-if="job.location" class="meta-tag">📍 {{ job.location }}</span>
+                  <span v-if="job.job_type" class="meta-tag meta-tag-accent">{{ job.job_type }}</span>
+                </div>
+                <div class="job-card-actions" @click.stop>
+                  <a v-if="job.url" :href="job.url" target="_blank" rel="noopener" class="btn-primary btn-sm">Apply on LinkedIn</a>
+                  <button class="btn-secondary btn-sm" @click="copyLink(job)" title="Copy link">🔗</button>
+                  <button class="btn-secondary btn-sm btn-saved" @click="saveJob(job)">Remove</button>
+                </div>
               </div>
             </div>
-          </div>
+          </template>
         </section>
 
         <!-- History tab -->
@@ -680,6 +865,29 @@ onUnmounted(() => {
           </table>
         </section>
       </main>
+    </div>
+
+    <!-- Job details modal -->
+    <div v-if="selectedJob" class="modal-overlay" @click.self="closeJobDetails">
+      <div class="modal">
+        <button class="modal-close" @click="closeJobDetails">&times;</button>
+        <h2 class="modal-title">{{ selectedJob.title }}</h2>
+        <div class="modal-company">{{ selectedJob.company }}</div>
+        <div class="job-card-meta">
+          <span v-if="selectedJob.location" class="meta-tag">📍 {{ selectedJob.location }}</span>
+          <span v-if="selectedJob.job_type" class="meta-tag meta-tag-accent">{{ selectedJob.job_type }}</span>
+          <span v-if="selectedJob.experience_level" class="meta-tag">{{ selectedJob.experience_level }}</span>
+          <span v-if="selectedJob.posted_date" class="meta-tag">{{ selectedJob.posted_date }}</span>
+        </div>
+        <div v-if="selectedJob.summary" class="modal-desc" v-html="highlightSummary(selectedJob.summary)"></div>
+        <div class="job-card-actions">
+          <a v-if="selectedJob.url" :href="selectedJob.url" target="_blank" rel="noopener" class="btn-primary btn-sm">Apply on LinkedIn</a>
+          <button class="btn-secondary btn-sm" @click="copyLink(selectedJob)">🔗 Copy link</button>
+          <button class="btn-secondary btn-sm" :class="{ 'btn-saved': isSaved(selectedJob) }" @click="saveJob(selectedJob)">
+            {{ isSaved(selectedJob) ? '★ Saved' : '☆ Save' }}
+          </button>
+        </div>
+      </div>
     </div>
   </div>
 </template>
@@ -876,7 +1084,7 @@ body { background: var(--canvas); }
   color: var(--ink-soft);
 }
 .filter-group select,
-.filter-group input {
+.filter-group input:not([type="checkbox"]) {
   width: 100%;
   min-height: 46px;
   padding: 0.7rem 0.9rem;
@@ -888,10 +1096,35 @@ body { background: var(--canvas); }
   color: var(--ink);
 }
 .filter-group select:focus,
-.filter-group input:focus {
+.filter-group input:not([type="checkbox"]):focus {
   outline: none;
   border-color: var(--brand);
   box-shadow: 0 0 0 3px rgba(47, 111, 237, 0.12);
+}
+.checkbox-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  min-height: 46px;
+  justify-content: center;
+  padding: 0.5rem 0.9rem;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+.checkbox-option {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+  color: var(--ink);
+  cursor: pointer;
+}
+.checkbox-option input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--brand);
+  cursor: pointer;
 }
 .download-link {
   display: flex;
@@ -1189,6 +1422,7 @@ body { background: var(--canvas); }
   display: flex;
   flex-direction: column;
   transition: box-shadow 0.15s, transform 0.15s;
+  cursor: pointer;
 }
 .job-card:hover {
   box-shadow: 0 4px 20px rgba(16, 24, 40, 0.1);
@@ -1313,6 +1547,96 @@ body { background: var(--canvas); }
   background: var(--canvas);
 }
 .history-table tr:last-child td { border-bottom: none; }
+
+/* Recent searches */
+.recent-searches {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.8rem;
+}
+.recent-label {
+  font-size: 0.8rem;
+  color: var(--ink-soft);
+  font-weight: 600;
+}
+.recent-chip {
+  border: 1px solid var(--line);
+  background: var(--canvas);
+  color: var(--ink-soft);
+  border-radius: 999px;
+  padding: 0.25rem 0.8rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.recent-chip:hover { border-color: var(--brand); color: var(--brand); }
+
+.saved-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 1rem;
+}
+
+/* Highlighted keywords */
+:deep(mark) {
+  background: rgba(255, 214, 51, 0.5);
+  color: inherit;
+  border-radius: 3px;
+  padding: 0 0.15em;
+}
+
+/* Job details modal */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 14, 20, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  z-index: 200;
+}
+.modal {
+  position: relative;
+  background: var(--surface);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 1.8rem;
+  max-width: 560px;
+  width: 100%;
+  max-height: 85vh;
+  overflow-y: auto;
+}
+.modal-close {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+  border: none;
+  background: none;
+  font-size: 1.4rem;
+  line-height: 1;
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+.modal-title {
+  font-size: 1.2rem;
+  font-weight: 700;
+  margin: 0 0 0.2rem;
+  padding-right: 2rem;
+}
+.modal-company {
+  color: var(--ink-soft);
+  font-weight: 500;
+  margin-bottom: 0.8rem;
+}
+.modal-desc {
+  color: var(--ink);
+  font-size: 0.92rem;
+  line-height: 1.6;
+  margin: 1rem 0 1.4rem;
+  white-space: pre-line;
+}
 
 @media (max-width: 800px) {
   .main-layout { flex-direction: column; padding: 0 1rem; }
