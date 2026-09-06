@@ -1,0 +1,9 @@
+.venv
+venv
+__pycache__
+*.pyc
+*.db
+jobs_output.json
+jobs_output.csv
+run_history.json
+seen_jobs.json

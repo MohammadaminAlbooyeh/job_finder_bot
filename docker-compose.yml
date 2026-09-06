@@ -1,0 +1,27 @@
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - backend_data:/app/data
+    environment:
+      - SCHEDULE_INTERVAL_HOURS=2
+      - OUTPUT_PATH=/app/data/jobs_output.json
+      - PERSISTENCE=csv
+      - PERSISTENCE_CSV_PATH=/app/data/jobs_output.csv
+      - STATE_PATH=/app/data/seen_jobs.json
+      - HISTORY_PATH=/app/data/run_history.json
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_URL: http://localhost:8000
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend
+
+volumes:
+  backend_data:
