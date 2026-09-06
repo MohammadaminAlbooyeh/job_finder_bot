@@ -7,9 +7,10 @@ from filters.job_filter import dedupe_jobs, filter_jobs, load_rules
 from notifier.email_sender import notify_jobs_via_email
 from notifier.telegram_sender import notify_jobs_via_telegram
 from persistence import save_to_csv, save_to_sqlite, detect_new_jobs
+from cv_parser import extract_text, analyze_cv
 
 from apscheduler.schedulers.background import BackgroundScheduler
-from fastapi import FastAPI
+from fastapi import FastAPI, UploadFile, File
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -75,6 +76,22 @@ def run_jobs(
         date_posted=date_posted or None,
     )
     return JSONResponse(content=jobs)
+
+
+@app.post("/parse-cv")
+async def parse_cv(file: UploadFile = File(...)):
+    """Extract text from an uploaded CV (.pdf, .docx or .txt) and suggest a search query."""
+    content = await file.read()
+    try:
+        text = extract_text(file.filename, content)
+    except Exception as e:
+        return JSONResponse(content={"error": f"Could not read CV: {e}"}, status_code=400)
+
+    if not text.strip():
+        return JSONResponse(content={"error": "No readable text found in the uploaded file."}, status_code=400)
+
+    analysis = analyze_cv(text)
+    return JSONResponse(content=analysis)
 
 
 @app.get("/download/csv")

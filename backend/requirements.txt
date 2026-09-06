@@ -8,3 +8,6 @@ undetected-chromedriver
 fastapi
 uvicorn[standard]
 apscheduler
+python-multipart
+pdfplumber
+python-docx

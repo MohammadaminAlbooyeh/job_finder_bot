@@ -14,6 +14,11 @@ const loading = ref(false)
 const error = ref('')
 const notice = ref('')
 
+const cvFile = ref(null)
+const cvUploading = ref(false)
+const cvAnalysis = ref(null)
+const cvError = ref('')
+
 // Demo country/city and job title lists, can be replaced with API
 const countryList = [
   'Italy', 'Remote', 'United States', 'United Kingdom', 'Germany', 'France', 'Spain', 'Netherlands', 'Switzerland', 'Portugal', 'Ireland', 'Sweden', 'Canada', 'United Arab Emirates', 'India', 'Poland', 'Austria', 'Belgium', 'Turkey', 'Greece'
@@ -167,6 +172,43 @@ async function searchJobs() {
   }
 }
 
+function onCvFileSelected(event) {
+  cvFile.value = event.target.files?.[0] || null
+  cvAnalysis.value = null
+  cvError.value = ''
+}
+
+async function uploadCv() {
+  if (!cvFile.value) {
+    cvError.value = 'Please choose a CV file first (.pdf, .docx or .txt).'
+    return
+  }
+  cvUploading.value = true
+  cvError.value = ''
+  cvAnalysis.value = null
+
+  try {
+    const apiUrl = getApiBaseUrl()
+    const formData = new FormData()
+    formData.append('file', cvFile.value)
+
+    const res = await fetch(`${apiUrl}/parse-cv`, { method: 'POST', body: formData })
+    const data = await res.json()
+
+    if (!res.ok) {
+      throw new Error(data?.error || `API error: ${res.status}`)
+    }
+
+    cvAnalysis.value = data
+    searchTitle.value = data.suggested_query
+    notice.value = `CV analyzed — detected role "${data.suggested_query}". Now choose a location and job type on the left, then click Search.`
+  } catch (e) {
+    cvError.value = e?.message || 'Could not analyze the CV.'
+  } finally {
+    cvUploading.value = false
+  }
+}
+
 function saveJob(job) {
   // Placeholder for save functionality
   alert('Job saved!')
@@ -216,6 +258,23 @@ function saveJob(job) {
 
       <!-- Main Section -->
       <main class="content">
+        <!-- CV Upload -->
+        <section class="cv-box">
+          <h3>Find jobs based on your CV</h3>
+          <div class="cv-row">
+            <input type="file" accept=".pdf,.docx,.txt" @change="onCvFileSelected" />
+            <button @click="uploadCv" :disabled="cvUploading">{{ cvUploading ? 'Analyzing...' : 'Analyze CV' }}</button>
+          </div>
+          <div v-if="cvError" class="error">{{ cvError }}</div>
+          <div v-if="cvAnalysis" class="cv-result">
+            <div>Detected role: <strong>{{ cvAnalysis.suggested_query }}</strong></div>
+            <div v-if="cvAnalysis.matched_skills?.length">
+              Skills found: {{ cvAnalysis.matched_skills.join(', ') }}
+            </div>
+            <div class="cv-hint">Now pick a location and job type, then click Search.</div>
+          </div>
+        </section>
+
         <!-- Search Box -->
 
         <section class="search-box">
@@ -438,6 +497,37 @@ function saveJob(job) {
   background: #eef8f2;
   color: #1f6f4a;
   border: 1px solid #cdebd9;
+}
+.cv-box {
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+  padding: 1.2rem;
+  margin-bottom: 1.5rem;
+}
+.cv-row {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  margin-top: 0.6rem;
+}
+.cv-row button {
+  padding: 0.5rem 1.2rem;
+  border-radius: 4px;
+  border: none;
+  background: #35495e;
+  color: #fff;
+  font-weight: 600;
+  cursor: pointer;
+}
+.cv-result {
+  margin-top: 0.8rem;
+  color: #333;
+}
+.cv-hint {
+  margin-top: 0.4rem;
+  color: #1f6f4a;
+  font-size: 0.95em;
 }
 .search-box {
   margin-bottom: 2rem;
