@@ -7,6 +7,8 @@ out_*.json
 jobs_output.json
 jobs_output.csv
 jobs_output.html
+jobs_output__*.csv
+jobs_output__*.html
 run_history.json
 schedule_config.json
 *.db

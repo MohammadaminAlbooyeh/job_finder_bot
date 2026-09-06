@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
@@ -22,6 +23,22 @@ HISTORY_LIMIT = 30
 # folder and double-clicking jobs_output.html "just works" without digging into
 # backend/. Docker deployments override this via PERSISTENCE_HTML_PATH.
 DEFAULT_HTML_PATH = os.path.join("..", "jobs_output.html")
+
+
+def _slugify(text):
+    slug = re.sub(r"[^a-z0-9]+", "-", (text or "").strip().lower()).strip("-")
+    return slug or "untitled"
+
+
+def _pair_file_base(title, location):
+    return f"jobs_output__{_slugify(title)}__{_slugify(location)}"
+
+
+def _pair_path(title, location, extension):
+    default_path = DEFAULT_HTML_PATH if extension == "html" else "jobs_output.csv"
+    env_var = "PERSISTENCE_HTML_PATH" if extension == "html" else "PERSISTENCE_CSV_PATH"
+    base_dir = os.path.dirname(os.getenv(env_var, default_path)) or "."
+    return os.path.join(base_dir, f"{_pair_file_base(title, location)}.{extension}")
 
 
 @asynccontextmanager
@@ -73,12 +90,19 @@ def _load_schedule_config():
     try:
         with open(config_path, "r", encoding="utf-8") as f:
             config = json.load(f)
-        # migrate the older single-"location" format
-        if config and "locations" not in config and config.get("location"):
-            config["locations"] = [config.pop("location")]
-        return config
     except Exception:
         return None
+
+    if not config or "pairs" in config:
+        return config
+
+    # migrate older formats to the current {"pairs": [{"title", "location"}]} shape
+    if config.get("titles") and config.get("locations"):
+        titles, locations = config["titles"], config["locations"]
+        config["pairs"] = [{"title": t, "location": loc} for t in titles for loc in locations]
+    elif config.get("titles") and config.get("location"):
+        config["pairs"] = [{"title": t, "location": config["location"]} for t in config["titles"]]
+    return config
 
 
 def _save_schedule_config(config):
@@ -144,25 +168,30 @@ def history():
 
 @app.get("/schedule-config")
 def get_schedule_config():
-    return getattr(app.state, "schedule_config", None) or {"titles": [], "locations": []}
+    return getattr(app.state, "schedule_config", None) or {"pairs": []}
 
 
 @app.post("/schedule-config")
 async def set_schedule_config(request: Request):
-    """Configure a fixed list of job titles and locations (2-3, or as many as you
-    like, of each) that the every-2-hours auto-scan will keep searching — every
-    title x location combination — until this is called again, independent of
-    whatever is typed into the manual search box."""
+    """Configure a fixed list of (job title, location) pairs that the every-2-hours
+    auto-scan keeps searching — each pair strictly on its own (no cross-combining),
+    writing its own separate CSV/HTML file — until this is called again, independent
+    of whatever is typed into the manual search box."""
     body = await request.json()
-    titles = [t.strip() for t in body.get("titles", []) if isinstance(t, str) and t.strip()]
-    locations = [l.strip() for l in body.get("locations", []) if isinstance(l, str) and l.strip()]
+    raw_pairs = body.get("pairs", [])
+    pairs = []
+    for p in raw_pairs:
+        if not isinstance(p, dict):
+            continue
+        title = (p.get("title") or "").strip()
+        location = (p.get("location") or "remote").strip()
+        if title:
+            pairs.append({"title": title, "location": location})
 
-    if not titles:
-        return JSONResponse(content={"error": "Provide at least one job title."}, status_code=400)
-    if not locations:
-        locations = ["remote"]
+    if not pairs:
+        return JSONResponse(content={"error": "Provide at least one (title, location) pair."}, status_code=400)
 
-    config = {"titles": titles, "locations": locations}
+    config = {"pairs": pairs}
     app.state.schedule_config = config
     _save_schedule_config(config)
     return config
@@ -243,6 +272,26 @@ def download_html():
     return FileResponse(html_path, media_type="text/html", filename="jobs_output.html")
 
 
+@app.get("/download/pair-html")
+def download_pair_html(title: str, location: str = "remote"):
+    from fastapi.responses import FileResponse
+
+    path = _pair_path(title, location, "html")
+    if not os.path.exists(path):
+        return JSONResponse(content={"error": "No HTML report yet for this title/location pair."}, status_code=404)
+    return FileResponse(path, media_type="text/html", filename=os.path.basename(path))
+
+
+@app.get("/download/pair-csv")
+def download_pair_csv(title: str, location: str = "remote"):
+    from fastapi.responses import FileResponse
+
+    path = _pair_path(title, location, "csv")
+    if not os.path.exists(path):
+        return JSONResponse(content={"error": "No CSV file yet for this title/location pair."}, status_code=404)
+    return FileResponse(path, media_type="text/csv", filename=os.path.basename(path))
+
+
 @app.post("/export")
 async def export_jobs(request: Request):
     """Persist an already-merged list of jobs (e.g. combined across several
@@ -272,6 +321,8 @@ def run_all(
     date_posted=None,
     experience_level=None,
     triggered_by="manual",
+    csv_path=None,
+    html_path=None,
 ):
     queries = query if isinstance(query, list) else [query]
     locations = location if isinstance(location, list) else [location]
@@ -333,11 +384,12 @@ def run_all(
     print(f"Saved {output_path} (new_only={new_only}, new_count={len(new_jobs)})")
 
     # Always persist results to CSV and a clickable HTML report after every run.
-    csv_path = os.getenv("PERSISTENCE_CSV_PATH", "jobs_output.csv")
+    # A caller (e.g. per-pair scheduled scans) may override where these land.
+    csv_path = csv_path or os.getenv("PERSISTENCE_CSV_PATH", "jobs_output.csv")
     save_to_csv(filtered_jobs, csv_path)
     print(f"Saved CSV to {csv_path}")
 
-    html_path = os.getenv("PERSISTENCE_HTML_PATH", DEFAULT_HTML_PATH)
+    html_path = html_path or os.getenv("PERSISTENCE_HTML_PATH", DEFAULT_HTML_PATH)
     save_to_html(filtered_jobs, html_path)
     print(f"Saved HTML report to {html_path}")
 
@@ -381,22 +433,33 @@ def run_all(
 def scheduled_run(triggered_by="scheduler"):
     """Runs the LinkedIn search automatically on a recurring interval.
 
-    Prefers an explicit /schedule-config (a fixed list of job titles and
-    locations) if one has been set — that stays in effect until changed again,
-    regardless of what gets typed into the manual search box. Falls back to
-    whatever was last searched manually, then to JOB_QUERY/JOB_LOCATION env vars.
+    Prefers an explicit /schedule-config (a fixed list of strict (title, location)
+    pairs) if one has been set — that stays in effect until changed again,
+    regardless of what gets typed into the manual search box. Each pair is
+    searched entirely on its own (no cross-combining) and written to its own
+    CSV/HTML file. Falls back to whatever was last searched manually, then to
+    JOB_QUERY/JOB_LOCATION env vars.
     """
     schedule_config = getattr(app.state, "schedule_config", None)
-    if schedule_config and schedule_config.get("titles"):
-        print("Running scheduled LinkedIn search (schedule-config):", schedule_config)
-        return run_all(
-            query=schedule_config["titles"],
-            location=schedule_config.get("locations") or ["remote"],
-            num_pages=int(os.getenv("JOB_PAGES", "1")),
-            enable_email=os.getenv("ENABLE_EMAIL", "false").lower() in ("true", "1", "yes"),
-            enable_telegram=os.getenv("ENABLE_TELEGRAM", "false").lower() in ("true", "1", "yes"),
-            triggered_by=triggered_by,
-        )
+    pairs = schedule_config.get("pairs") if schedule_config else None
+    if pairs:
+        print("Running scheduled LinkedIn search (schedule-config pairs):", pairs)
+        all_jobs = []
+        for pair in pairs:
+            title, loc = pair["title"], pair.get("location") or "remote"
+            all_jobs.extend(
+                run_all(
+                    query=title,
+                    location=loc,
+                    num_pages=int(os.getenv("JOB_PAGES", "1")),
+                    enable_email=os.getenv("ENABLE_EMAIL", "false").lower() in ("true", "1", "yes"),
+                    enable_telegram=os.getenv("ENABLE_TELEGRAM", "false").lower() in ("true", "1", "yes"),
+                    triggered_by=triggered_by,
+                    csv_path=_pair_path(title, loc, "csv"),
+                    html_path=_pair_path(title, loc, "html"),
+                )
+            )
+        return all_jobs
 
     params = getattr(app.state, "last_search_params", None) or {}
     print("Running scheduled LinkedIn search (last manual search):", params)

@@ -44,10 +44,9 @@ const runningNow = ref(false)
 const historyList = ref([])
 const historyLoading = ref(false)
 
-const scheduleTitles = ref([])
+const schedulePairs = ref([]) // [{ title, location }] — each pair gets its own separate CSV/HTML file
 const scheduleTitleInput = ref('')
 const scheduleLocationInput = ref('')
-const scheduleLocations = ref([])
 const savingSchedule = ref(false)
 
 const selectedJob = ref(null)
@@ -556,20 +555,7 @@ async function runNow() {
   }
 }
 
-// --- Auto-scan schedule config (fixed titles the 2-hourly scan keeps using) ---
-function addScheduleTitle(title) {
-  const val = (typeof title === 'string' ? title : scheduleTitleInput.value).trim()
-  if (val && !scheduleTitles.value.includes(val)) {
-    scheduleTitles.value.push(val)
-  }
-  scheduleTitleInput.value = ''
-  showScheduleTitleSuggestions.value = false
-}
-
-function removeScheduleTitle(title) {
-  scheduleTitles.value = scheduleTitles.value.filter(t => t !== title)
-}
-
+// --- Auto-scan schedule config: strict (title, location) pairs, each its own file ---
 function updateScheduleTitleSuggestions() {
   const val = scheduleTitleInput.value.trim().toLowerCase()
   if (!val) {
@@ -581,12 +567,9 @@ function updateScheduleTitleSuggestions() {
   showScheduleTitleSuggestions.value = scheduleTitleSuggestions.value.length > 0
 }
 
-function onScheduleTitleEnter() {
-  if (scheduleTitleSuggestions.value.length > 0) {
-    addScheduleTitle(scheduleTitleSuggestions.value[0])
-  } else {
-    addScheduleTitle()
-  }
+function selectScheduleTitleSuggestion(title) {
+  scheduleTitleInput.value = title
+  showScheduleTitleSuggestions.value = false
 }
 
 function updateScheduleLocationSuggestions() {
@@ -596,29 +579,40 @@ function updateScheduleLocationSuggestions() {
     showScheduleLocationSuggestions.value = false
     return
   }
-  scheduleLocationSuggestions.value = locationList.filter(loc => loc.toLowerCase().startsWith(val) && !scheduleLocations.value.includes(loc)).slice(0, 6)
+  scheduleLocationSuggestions.value = locationList.filter(loc => loc.toLowerCase().startsWith(val)).slice(0, 6)
   showScheduleLocationSuggestions.value = scheduleLocationSuggestions.value.length > 0
 }
 
-function addScheduleLocation(loc) {
-  const val = (typeof loc === 'string' ? loc : scheduleLocationInput.value).trim()
-  if (val && !scheduleLocations.value.includes(val)) {
-    scheduleLocations.value.push(val)
-  }
-  scheduleLocationInput.value = ''
+function selectScheduleLocationSuggestion(loc) {
+  scheduleLocationInput.value = loc
   showScheduleLocationSuggestions.value = false
 }
 
-function removeScheduleLocation(loc) {
-  scheduleLocations.value = scheduleLocations.value.filter(l => l !== loc)
+function addSchedulePair() {
+  const title = scheduleTitleInput.value.trim()
+  const location = scheduleLocationInput.value.trim() || 'remote'
+  if (!title) {
+    showToast('Type a job title first', 'error')
+    return
+  }
+  if (schedulePairs.value.some(p => p.title === title && p.location === location)) {
+    showToast('That title/location pair is already in the list', 'error')
+    return
+  }
+  schedulePairs.value.push({ title, location })
+  scheduleTitleInput.value = ''
+  scheduleLocationInput.value = ''
+  showScheduleTitleSuggestions.value = false
+  showScheduleLocationSuggestions.value = false
 }
 
-function onScheduleLocationEnter() {
-  if (scheduleLocationSuggestions.value.length > 0) {
-    addScheduleLocation(scheduleLocationSuggestions.value[0])
-  } else {
-    addScheduleLocation()
-  }
+function removeSchedulePair(index) {
+  schedulePairs.value.splice(index, 1)
+}
+
+function pairDownloadUrl(pair, kind) {
+  const params = new URLSearchParams({ title: pair.title, location: pair.location })
+  return `${getApiBaseUrl()}/download/pair-${kind}?${params.toString()}`
 }
 
 async function fetchScheduleConfig() {
@@ -626,8 +620,7 @@ async function fetchScheduleConfig() {
     const res = await fetch(`${getApiBaseUrl()}/schedule-config`)
     if (res.ok) {
       const data = await res.json()
-      scheduleTitles.value = data.titles || []
-      scheduleLocations.value = data.locations || []
+      schedulePairs.value = data.pairs || []
     }
   } catch {
     // backend unreachable — leave form empty
@@ -635,8 +628,8 @@ async function fetchScheduleConfig() {
 }
 
 async function saveScheduleConfig() {
-  if (scheduleTitles.value.length === 0) {
-    showToast('Add at least one job title first', 'error')
+  if (schedulePairs.value.length === 0) {
+    showToast('Add at least one title/location pair first', 'error')
     return
   }
   savingSchedule.value = true
@@ -644,10 +637,10 @@ async function saveScheduleConfig() {
     const res = await fetch(`${getApiBaseUrl()}/schedule-config`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ titles: scheduleTitles.value, locations: scheduleLocations.value }),
+      body: JSON.stringify({ pairs: schedulePairs.value }),
     })
     if (!res.ok) throw new Error(`API error: ${res.status}`)
-    showToast('Auto-scan will keep searching these titles/locations every run', 'success')
+    showToast('Auto-scan will keep searching each pair separately every run', 'success')
     fetchStatus()
   } catch (e) {
     showToast(e?.message || 'Could not save schedule', 'error')
@@ -807,10 +800,11 @@ onUnmounted(() => {
         <!-- Auto-scan schedule config -->
         <section class="cv-box">
           <div class="cv-box-header">
-            <h3>Auto-scan job titles</h3>
+            <h3>Auto-scan title/location pairs</h3>
             <p class="cv-box-subtitle">
-              Give a few job titles and locations — the auto-scan (every {{ scanStatus?.interval_hours || 2 }}h) keeps
-              searching every title x location combination until you save a different list here.
+              Pair a job title with one location and add it. The auto-scan (every {{ scanStatus?.interval_hours || 2 }}h)
+              searches each pair strictly on its own — never combined with the others — and writes each one to its own
+              separate CSV/HTML file, until you save a different list here.
             </p>
           </div>
           <div class="cv-row">
@@ -819,7 +813,7 @@ onUnmounted(() => {
                 v-model="scheduleTitleInput"
                 type="text"
                 placeholder="Job title (e.g. python developer)"
-                @keyup.enter="onScheduleTitleEnter"
+                @keyup.enter="addSchedulePair"
                 @input="updateScheduleTitleSuggestions"
                 @focus="updateScheduleTitleSuggestions"
                 @blur="setTimeout(() => showScheduleTitleSuggestions = false, 120)"
@@ -827,26 +821,17 @@ onUnmounted(() => {
                 class="schedule-title-input"
               />
               <ul v-if="showScheduleTitleSuggestions" class="suggestions">
-                <li v-for="title in scheduleTitleSuggestions" :key="title" @mousedown.prevent="addScheduleTitle(title)">
+                <li v-for="title in scheduleTitleSuggestions" :key="title" @mousedown.prevent="selectScheduleTitleSuggestion(title)">
                   {{ title }}
                 </li>
               </ul>
             </div>
-            <button class="btn-secondary" @click="addScheduleTitle()">Add title</button>
-          </div>
-          <div v-if="scheduleTitles.length" class="selected-locations">
-            <span v-for="title in scheduleTitles" :key="title" class="location-tag">
-              {{ title }}
-              <button class="remove-tag" @click.prevent="removeScheduleTitle(title)">&times;</button>
-            </span>
-          </div>
-          <div class="cv-row" style="margin-top: 0.8rem;">
             <div class="search-field">
               <input
                 v-model="scheduleLocationInput"
                 type="text"
-                placeholder="Location (e.g. Italy, remote)"
-                @keyup.enter="onScheduleLocationEnter"
+                placeholder="Location (e.g. Italy, Europe)"
+                @keyup.enter="addSchedulePair"
                 @input="updateScheduleLocationSuggestions"
                 @focus="updateScheduleLocationSuggestions"
                 @blur="setTimeout(() => showScheduleLocationSuggestions = false, 120)"
@@ -854,19 +839,25 @@ onUnmounted(() => {
                 class="schedule-title-input"
               />
               <ul v-if="showScheduleLocationSuggestions" class="suggestions">
-                <li v-for="loc in scheduleLocationSuggestions" :key="loc" @mousedown.prevent="addScheduleLocation(loc)">
+                <li v-for="loc in scheduleLocationSuggestions" :key="loc" @mousedown.prevent="selectScheduleLocationSuggestion(loc)">
                   {{ loc }}
                 </li>
               </ul>
             </div>
-            <button class="btn-secondary" @click="addScheduleLocation()">Add location</button>
+            <button class="btn-secondary" @click="addSchedulePair">Add pair</button>
           </div>
-          <div v-if="scheduleLocations.length" class="selected-locations">
-            <span v-for="loc in scheduleLocations" :key="loc" class="location-tag">
-              {{ loc }}
-              <button class="remove-tag" @click.prevent="removeScheduleLocation(loc)">&times;</button>
-            </span>
+
+          <div v-if="schedulePairs.length" class="pair-list">
+            <div v-for="(pair, idx) in schedulePairs" :key="`${pair.title}__${pair.location}`" class="pair-row">
+              <span class="pair-label">{{ pair.title }} <span class="pair-arrow">→</span> {{ pair.location }}</span>
+              <div class="pair-actions">
+                <a :href="pairDownloadUrl(pair, 'html')" target="_blank" rel="noopener" class="btn-secondary btn-sm">HTML</a>
+                <a :href="pairDownloadUrl(pair, 'csv')" target="_blank" rel="noopener" class="btn-secondary btn-sm">CSV</a>
+                <button class="remove-tag" @click="removeSchedulePair(idx)">&times;</button>
+              </div>
+            </div>
           </div>
+
           <div class="cv-row" style="margin-top: 0.8rem;">
             <button class="btn-primary" @click="saveScheduleConfig" :disabled="savingSchedule">
               <span v-if="savingSchedule" class="spinner"></span>
@@ -1545,6 +1536,37 @@ body { background: var(--canvas); }
   flex-wrap: wrap;
   gap: 0.4rem;
   margin-top: 0.8rem;
+}
+.pair-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 0.8rem;
+}
+.pair-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  padding: 0.5rem 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--canvas);
+  flex-wrap: wrap;
+}
+.pair-label {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+.pair-arrow {
+  color: var(--ink-soft);
+  font-weight: 400;
+}
+.pair-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
 }
 .location-tag {
   background: var(--accent-soft);
