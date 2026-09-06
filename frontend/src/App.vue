@@ -44,6 +44,11 @@ const runningNow = ref(false)
 const historyList = ref([])
 const historyLoading = ref(false)
 
+const scheduleTitles = ref([])
+const scheduleTitleInput = ref('')
+const scheduleLocation = ref('')
+const savingSchedule = ref(false)
+
 const selectedJob = ref(null)
 
 // Demo country/city and job title lists, can be replaced with API
@@ -545,6 +550,54 @@ async function runNow() {
   }
 }
 
+// --- Auto-scan schedule config (fixed titles the 2-hourly scan keeps using) ---
+function addScheduleTitle() {
+  const val = scheduleTitleInput.value.trim()
+  if (val && !scheduleTitles.value.includes(val)) {
+    scheduleTitles.value.push(val)
+  }
+  scheduleTitleInput.value = ''
+}
+
+function removeScheduleTitle(title) {
+  scheduleTitles.value = scheduleTitles.value.filter(t => t !== title)
+}
+
+async function fetchScheduleConfig() {
+  try {
+    const res = await fetch(`${getApiBaseUrl()}/schedule-config`)
+    if (res.ok) {
+      const data = await res.json()
+      scheduleTitles.value = data.titles || []
+      scheduleLocation.value = data.location || ''
+    }
+  } catch {
+    // backend unreachable — leave form empty
+  }
+}
+
+async function saveScheduleConfig() {
+  if (scheduleTitles.value.length === 0) {
+    showToast('Add at least one job title first', 'error')
+    return
+  }
+  savingSchedule.value = true
+  try {
+    const res = await fetch(`${getApiBaseUrl()}/schedule-config`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ titles: scheduleTitles.value, location: scheduleLocation.value || 'remote' }),
+    })
+    if (!res.ok) throw new Error(`API error: ${res.status}`)
+    showToast('Auto-scan will keep searching these titles every run', 'success')
+    fetchStatus()
+  } catch (e) {
+    showToast(e?.message || 'Could not save schedule', 'error')
+  } finally {
+    savingSchedule.value = false
+  }
+}
+
 function selectTab(tab) {
   activeTab.value = tab
   if (tab === 'history') fetchHistory()
@@ -573,6 +626,7 @@ onMounted(() => {
     recentSearches.value = []
   }
   fetchStatus()
+  fetchScheduleConfig()
   statusTimer = setInterval(fetchStatus, 60000)
 })
 
@@ -689,6 +743,40 @@ onUnmounted(() => {
               <span v-for="skill in cvAnalysis.matched_skills" :key="skill" class="skill-tag">{{ skill }}</span>
             </div>
             <div class="cv-hint">Pick a location and job type below, then click Search.</div>
+          </div>
+        </section>
+
+        <!-- Auto-scan schedule config -->
+        <section class="cv-box">
+          <div class="cv-box-header">
+            <h3>Auto-scan job titles</h3>
+            <p class="cv-box-subtitle">
+              Give 2-3 job titles and one location — the auto-scan (every {{ scanStatus?.interval_hours || 2 }}h) keeps
+              searching exactly these until you save a different list here.
+            </p>
+          </div>
+          <div class="cv-row">
+            <input
+              v-model="scheduleTitleInput"
+              type="text"
+              placeholder="Job title (e.g. python developer)"
+              @keyup.enter="addScheduleTitle"
+              class="schedule-title-input"
+            />
+            <button class="btn-secondary" @click="addScheduleTitle">Add title</button>
+          </div>
+          <div v-if="scheduleTitles.length" class="selected-locations">
+            <span v-for="title in scheduleTitles" :key="title" class="location-tag">
+              {{ title }}
+              <button class="remove-tag" @click.prevent="removeScheduleTitle(title)">&times;</button>
+            </span>
+          </div>
+          <div class="cv-row" style="margin-top: 0.8rem;">
+            <input v-model="scheduleLocation" type="text" placeholder="Location (e.g. Italy, remote)" class="schedule-title-input" />
+            <button class="btn-primary" @click="saveScheduleConfig" :disabled="savingSchedule">
+              <span v-if="savingSchedule" class="spinner"></span>
+              {{ savingSchedule ? 'Saving…' : 'Save schedule' }}
+            </button>
           </div>
         </section>
 
@@ -1248,6 +1336,22 @@ body { background: var(--canvas); }
   gap: 0.8rem;
   align-items: center;
   flex-wrap: wrap;
+}
+.schedule-title-input {
+  flex: 1;
+  min-width: 220px;
+  padding: 0.6rem 0.9rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 0.9rem;
+  background: var(--surface);
+  color: var(--ink);
+}
+.schedule-title-input:focus {
+  outline: none;
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px rgba(47, 111, 237, 0.12);
 }
 .file-input {
   flex: 1;

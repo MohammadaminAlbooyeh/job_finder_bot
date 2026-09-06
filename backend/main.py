@@ -18,12 +18,17 @@ from fastapi.middleware.cors import CORSMiddleware
 
 scheduler = BackgroundScheduler()
 HISTORY_LIMIT = 30
+# Written one directory up (the project root) by default, so opening the repo
+# folder and double-clicking jobs_output.html "just works" without digging into
+# backend/. Docker deployments override this via PERSISTENCE_HTML_PATH.
+DEFAULT_HTML_PATH = os.path.join("..", "jobs_output.html")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.last_search_params = None
     app.state.history = _load_history()
+    app.state.schedule_config = _load_schedule_config()
     interval_hours = float(os.getenv("SCHEDULE_INTERVAL_HOURS", "2"))
     scheduler.add_job(scheduled_run, "interval", hours=interval_hours, id="linkedin_scan", replace_existing=True)
     scheduler.start()
@@ -59,6 +64,23 @@ def _save_history(history):
     history_path = os.getenv("HISTORY_PATH", "run_history.json")
     with open(history_path, "w", encoding="utf-8") as f:
         json.dump(history[-HISTORY_LIMIT:], f, ensure_ascii=False, indent=2)
+
+
+def _load_schedule_config():
+    config_path = os.getenv("SCHEDULE_CONFIG_PATH", "schedule_config.json")
+    if not os.path.exists(config_path):
+        return None
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def _save_schedule_config(config):
+    config_path = os.getenv("SCHEDULE_CONFIG_PATH", "schedule_config.json")
+    with open(config_path, "w", encoding="utf-8") as f:
+        json.dump(config, f, ensure_ascii=False, indent=2)
 
 
 def _record_run(query, location, date_posted, experience_level, total, new_count, triggered_by):
@@ -107,12 +129,36 @@ def status():
         "next_run_at": job.next_run_time.isoformat() if job and job.next_run_time else None,
         "last_run": last_run,
         "last_search_params": getattr(app.state, "last_search_params", None),
+        "schedule_config": getattr(app.state, "schedule_config", None),
     }
 
 
 @app.get("/history")
 def history():
     return list(reversed(getattr(app.state, "history", None) or []))
+
+
+@app.get("/schedule-config")
+def get_schedule_config():
+    return getattr(app.state, "schedule_config", None) or {"titles": [], "location": ""}
+
+
+@app.post("/schedule-config")
+async def set_schedule_config(request: Request):
+    """Configure a fixed list of job titles (2-3, or as many as you like) that the
+    every-2-hours auto-scan will keep searching for a single location, until this
+    is called again — independent of whatever is typed into the manual search box."""
+    body = await request.json()
+    titles = [t.strip() for t in body.get("titles", []) if isinstance(t, str) and t.strip()]
+    location = (body.get("location") or "remote").strip()
+
+    if not titles:
+        return JSONResponse(content={"error": "Provide at least one job title."}, status_code=400)
+
+    config = {"titles": titles, "location": location}
+    app.state.schedule_config = config
+    _save_schedule_config(config)
+    return config
 
 
 @app.post("/run-now")
@@ -184,7 +230,7 @@ def download_csv():
 def download_html():
     from fastapi.responses import FileResponse
 
-    html_path = os.getenv("PERSISTENCE_HTML_PATH", "jobs_output.html")
+    html_path = os.getenv("PERSISTENCE_HTML_PATH", DEFAULT_HTML_PATH)
     if not os.path.exists(html_path):
         return JSONResponse(content={"error": "No HTML report yet. Run a search first."}, status_code=404)
     return FileResponse(html_path, media_type="text/html", filename="jobs_output.html")
@@ -201,7 +247,7 @@ async def export_jobs(request: Request):
         return JSONResponse(content={"error": "Expected a list of jobs."}, status_code=400)
 
     csv_path = os.getenv("PERSISTENCE_CSV_PATH", "jobs_output.csv")
-    html_path = os.getenv("PERSISTENCE_HTML_PATH", "jobs_output.html")
+    html_path = os.getenv("PERSISTENCE_HTML_PATH", DEFAULT_HTML_PATH)
     save_to_csv(jobs, csv_path)
     save_to_html(jobs, html_path)
     return {"status": "ok", "count": len(jobs)}
@@ -220,18 +266,22 @@ def run_all(
     experience_level=None,
     triggered_by="manual",
 ):
-    print("Scraping LinkedIn...")
-    try:
-        all_jobs = scrape_linkedin(
-            query=query,
-            location=location,
-            num_pages=num_pages,
-            date_posted=date_posted,
-            experience_level=experience_level,
-        )
-    except Exception as e:
-        print("LinkedIn scraping failed:", e)
-        all_jobs = []
+    queries = query if isinstance(query, list) else [query]
+    all_jobs = []
+    for q in queries:
+        print(f"Scraping LinkedIn for '{q}'...")
+        try:
+            all_jobs.extend(
+                scrape_linkedin(
+                    query=q,
+                    location=location,
+                    num_pages=num_pages,
+                    date_posted=date_posted,
+                    experience_level=experience_level,
+                )
+            )
+        except Exception as e:
+            print(f"LinkedIn scraping failed for '{q}':", e)
 
     all_jobs = dedupe_jobs(all_jobs)
     # if rules file provided, load defaults unless explicitly passed
@@ -278,7 +328,7 @@ def run_all(
     save_to_csv(filtered_jobs, csv_path)
     print(f"Saved CSV to {csv_path}")
 
-    html_path = os.getenv("PERSISTENCE_HTML_PATH", "jobs_output.html")
+    html_path = os.getenv("PERSISTENCE_HTML_PATH", DEFAULT_HTML_PATH)
     save_to_html(filtered_jobs, html_path)
     print(f"Saved HTML report to {html_path}")
 
@@ -307,7 +357,7 @@ def run_all(
             print("Telegram notification failed:", e)
 
     _record_run(
-        query=query,
+        query=", ".join(queries) if isinstance(query, list) else query,
         location=location,
         date_posted=date_posted,
         experience_level=experience_level,
@@ -320,10 +370,27 @@ def run_all(
 
 
 def scheduled_run(triggered_by="scheduler"):
-    """Runs the LinkedIn search automatically on a recurring interval using the
-    last parameters submitted through the API (falls back to defaults)."""
+    """Runs the LinkedIn search automatically on a recurring interval.
+
+    Prefers an explicit /schedule-config (a fixed list of job titles + one
+    location) if one has been set — that stays in effect until changed again,
+    regardless of what gets typed into the manual search box. Falls back to
+    whatever was last searched manually, then to JOB_QUERY/JOB_LOCATION env vars.
+    """
+    schedule_config = getattr(app.state, "schedule_config", None)
+    if schedule_config and schedule_config.get("titles"):
+        print("Running scheduled LinkedIn search (schedule-config):", schedule_config)
+        return run_all(
+            query=schedule_config["titles"],
+            location=schedule_config.get("location") or "remote",
+            num_pages=int(os.getenv("JOB_PAGES", "1")),
+            enable_email=os.getenv("ENABLE_EMAIL", "false").lower() in ("true", "1", "yes"),
+            enable_telegram=os.getenv("ENABLE_TELEGRAM", "false").lower() in ("true", "1", "yes"),
+            triggered_by=triggered_by,
+        )
+
     params = getattr(app.state, "last_search_params", None) or {}
-    print("Running scheduled LinkedIn search:", params)
+    print("Running scheduled LinkedIn search (last manual search):", params)
     include_keywords = params.get("include_keywords")
     exclude_keywords = params.get("exclude_keywords")
     return run_all(

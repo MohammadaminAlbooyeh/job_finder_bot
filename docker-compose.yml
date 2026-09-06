@@ -13,6 +13,7 @@ services:
       - PERSISTENCE_HTML_PATH=/app/data/jobs_output.html
       - STATE_PATH=/app/data/seen_jobs.json
       - HISTORY_PATH=/app/data/run_history.json
+      - SCHEDULE_CONFIG_PATH=/app/data/schedule_config.json
 
   frontend:
     build:

@@ -8,4 +8,5 @@ jobs_output.json
 jobs_output.csv
 jobs_output.html
 run_history.json
+schedule_config.json
 *.db
