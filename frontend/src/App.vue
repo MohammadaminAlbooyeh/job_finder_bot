@@ -1,17 +1,11 @@
 
 
 <script setup>
-import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 
 const searchTitle = ref('')
 const searchLocation = ref('')
 const selectedLocations = ref([])
-const jobTypeOptions = [
-  { value: 'remote', label: 'Remote' },
-  { value: 'onsite', label: 'On-site' },
-  { value: 'hybrid', label: 'Hybrid' },
-]
-const selectedJobTypes = ref([])
 const experienceLevelOptions = [
   { value: 'entry', label: 'Entry' },
   { value: 'associate', label: 'Associate' },
@@ -19,11 +13,6 @@ const experienceLevelOptions = [
   { value: 'director', label: 'Director' },
 ]
 const selectedExperienceLevels = ref([])
-const applyTypeOptions = [
-  { value: 'easy', label: 'Easy Apply' },
-  { value: 'regular', label: 'Regular Apply' },
-]
-const selectedApplyTypes = ref([])
 const datePosted = ref('')
 const includeKeywords = ref('')
 const excludeKeywords = ref('')
@@ -135,14 +124,6 @@ function toggleExperienceLevel(value) {
   }
 }
 
-function toggleApplyType(value) {
-  if (selectedApplyTypes.value.includes(value)) {
-    selectedApplyTypes.value = selectedApplyTypes.value.filter(v => v !== value)
-  } else {
-    selectedApplyTypes.value = [...selectedApplyTypes.value, value]
-  }
-}
-
 function getApiBaseUrl() {
   const raw = (import.meta.env.VITE_API_URL || '').trim()
   const productionFallback = 'https://job-finder-bot-xhst.onrender.com'
@@ -162,17 +143,8 @@ function jobKey(job) {
   return (job?.url || `${job?.title || ''}|${job?.company || ''}|${job?.location || ''}`).trim()
 }
 
-function toggleJobType(value) {
-  if (selectedJobTypes.value.includes(value)) {
-    selectedJobTypes.value = selectedJobTypes.value.filter(v => v !== value)
-  } else {
-    selectedJobTypes.value = [...selectedJobTypes.value, value]
-  }
-}
-
-function buildQueryParams(pages, jobTypeValue, experienceValue) {
+function buildQueryParams(pages, experienceValue) {
   const parts = []
-  if (jobTypeValue) parts.push(`job_type=${encodeURIComponent(jobTypeValue)}`)
   if (experienceValue) parts.push(`experience_level=${encodeURIComponent(experienceValue)}`)
   if (datePosted.value) parts.push(`date_posted=${encodeURIComponent(datePosted.value)}`)
   if (includeKeywords.value.trim()) parts.push(`include_keywords=${encodeURIComponent(includeKeywords.value.trim())}`)
@@ -194,23 +166,20 @@ function currentLocations() {
 }
 
 async function fetchJobsForLocations(apiUrl, queries, locations, pages) {
-  // Fan out over every query x location x job-type x experience-level combination (OR'd together).
-  const jobTypesToQuery = selectedJobTypes.value.length > 0 ? selectedJobTypes.value : ['']
+  // Fan out over every query x location x experience-level combination (OR'd together).
   const experienceToQuery = selectedExperienceLevels.value.length > 0 ? selectedExperienceLevels.value : ['']
   const combos = []
   for (const q of queries) {
     for (const loc of locations) {
-      for (const jt of jobTypesToQuery) {
-        for (const exp of experienceToQuery) {
-          combos.push({ q, loc, jt, exp })
-        }
+      for (const exp of experienceToQuery) {
+        combos.push({ q, loc, exp })
       }
     }
   }
 
   const responses = await Promise.all(
-    combos.map(async ({ q, loc, jt, exp }) => {
-      const extraParams = buildQueryParams(pages, jt, exp)
+    combos.map(async ({ q, loc, exp }) => {
+      const extraParams = buildQueryParams(pages, exp)
       const res = await fetch(
         `${apiUrl}/run?query=${encodeURIComponent(q)}&location=${encodeURIComponent(loc)}${extraParams}`
       )
@@ -344,9 +313,7 @@ async function loadMore() {
 }
 
 function clearFilters() {
-  selectedJobTypes.value = []
   selectedExperienceLevels.value = []
-  selectedApplyTypes.value = []
   datePosted.value = ''
   includeKeywords.value = ''
   excludeKeywords.value = ''
@@ -357,13 +324,7 @@ function clearFilters() {
 }
 
 const sortedJobs = computed(() => {
-  let list = [...jobs.value]
-
-  if (selectedApplyTypes.value.length > 0) {
-    const wantEasy = selectedApplyTypes.value.includes('easy')
-    const wantRegular = selectedApplyTypes.value.includes('regular')
-    list = list.filter(j => (j.easy_apply ? wantEasy : wantRegular))
-  }
+  const list = [...jobs.value]
 
   if (sortBy.value === 'title') {
     return list.sort((a, b) => (a.title || '').localeCompare(b.title || ''))
@@ -372,11 +333,6 @@ const sortedJobs = computed(() => {
     return list.sort((a, b) => (b.is_new === a.is_new) ? 0 : (b.is_new ? 1 : -1))
   }
   return list
-})
-
-// Keep the downloadable CSV/HTML in sync whenever the apply-type filter changes results.
-watch(selectedApplyTypes, () => {
-  if (jobs.value.length > 0) exportResultsToBackend(sortedJobs.value)
 })
 
 function onCvFileSelected(event) {
@@ -496,7 +452,7 @@ function exportSavedCsv() {
     showToast('No saved jobs to export', 'error')
     return
   }
-  const columns = ['title', 'company', 'location', 'job_type', 'posted_date', 'url']
+  const columns = ['title', 'company', 'location', 'salary', 'posted_date', 'url']
   const rows = [columns.join(',')]
   for (const job of savedJobs.value) {
     rows.push(columns.map(col => `"${String(job[col] || '').replace(/"/g, '""')}"`).join(','))
@@ -637,19 +593,6 @@ onUnmounted(() => {
       <aside class="sidebar">
         <h3>Filters</h3>
         <div class="filter-group">
-          <label>Job Type</label>
-          <div class="checkbox-group">
-            <label v-for="opt in jobTypeOptions" :key="opt.value" class="checkbox-option">
-              <input
-                type="checkbox"
-                :checked="selectedJobTypes.includes(opt.value)"
-                @change="toggleJobType(opt.value)"
-              />
-              {{ opt.label }}
-            </label>
-          </div>
-        </div>
-        <div class="filter-group">
           <label>Experience Level</label>
           <div class="checkbox-group">
             <label v-for="opt in experienceLevelOptions" :key="opt.value" class="checkbox-option">
@@ -657,19 +600,6 @@ onUnmounted(() => {
                 type="checkbox"
                 :checked="selectedExperienceLevels.includes(opt.value)"
                 @change="toggleExperienceLevel(opt.value)"
-              />
-              {{ opt.label }}
-            </label>
-          </div>
-        </div>
-        <div class="filter-group">
-          <label>Apply Type</label>
-          <div class="checkbox-group">
-            <label v-for="opt in applyTypeOptions" :key="opt.value" class="checkbox-option">
-              <input
-                type="checkbox"
-                :checked="selectedApplyTypes.includes(opt.value)"
-                @change="toggleApplyType(opt.value)"
               />
               {{ opt.label }}
             </label>
@@ -837,10 +767,8 @@ onUnmounted(() => {
                 </div>
                 <div class="job-card-meta">
                   <span v-if="job.location" class="meta-tag">📍 {{ job.location }}</span>
-                  <span v-if="job.job_type" class="meta-tag meta-tag-accent">{{ job.job_type }}</span>
                   <span v-if="job.experience_level" class="meta-tag">{{ job.experience_level }}</span>
                   <span v-if="job.posted_date" class="meta-tag">{{ job.posted_date }}</span>
-                  <span class="meta-tag" :class="job.easy_apply ? 'meta-tag-easy' : ''">{{ job.easy_apply ? '⚡ Easy Apply' : 'Regular Apply' }}</span>
                   <span v-if="job.salary" class="meta-tag meta-tag-salary">💰 {{ job.salary }}</span>
                 </div>
                 <div v-if="job.summary" class="job-card-desc" v-html="highlightSummary(job.summary.slice(0, 140) + (job.summary.length > 140 ? '…' : ''))"></div>
@@ -880,7 +808,6 @@ onUnmounted(() => {
                 </div>
                 <div class="job-card-meta">
                   <span v-if="job.location" class="meta-tag">📍 {{ job.location }}</span>
-                  <span v-if="job.job_type" class="meta-tag meta-tag-accent">{{ job.job_type }}</span>
                 </div>
                 <div class="job-card-actions" @click.stop>
                   <a v-if="job.url" :href="job.url" target="_blank" rel="noopener" class="btn-primary btn-sm">Apply on LinkedIn</a>
@@ -905,7 +832,7 @@ onUnmounted(() => {
                 <th>When</th>
                 <th>Query</th>
                 <th>Location</th>
-                <th>Type</th>
+                <th>Experience</th>
                 <th>Total</th>
                 <th>New</th>
                 <th>Trigger</th>
@@ -916,7 +843,7 @@ onUnmounted(() => {
                 <td>{{ formatTime(entry.timestamp) }}</td>
                 <td>{{ entry.query }}</td>
                 <td>{{ entry.location }}</td>
-                <td>{{ entry.job_type || '—' }}</td>
+                <td>{{ entry.experience_level || '—' }}</td>
                 <td>{{ entry.total }}</td>
                 <td><span v-if="entry.new_count" class="meta-tag meta-tag-accent">{{ entry.new_count }} new</span><span v-else>0</span></td>
                 <td>{{ entry.triggered_by }}</td>
@@ -935,10 +862,8 @@ onUnmounted(() => {
         <div class="modal-company">{{ selectedJob.company }}</div>
         <div class="job-card-meta">
           <span v-if="selectedJob.location" class="meta-tag">📍 {{ selectedJob.location }}</span>
-          <span v-if="selectedJob.job_type" class="meta-tag meta-tag-accent">{{ selectedJob.job_type }}</span>
           <span v-if="selectedJob.experience_level" class="meta-tag">{{ selectedJob.experience_level }}</span>
           <span v-if="selectedJob.posted_date" class="meta-tag">{{ selectedJob.posted_date }}</span>
-          <span class="meta-tag" :class="selectedJob.easy_apply ? 'meta-tag-easy' : ''">{{ selectedJob.easy_apply ? '⚡ Easy Apply' : 'Regular Apply' }}</span>
           <span v-if="selectedJob.salary" class="meta-tag meta-tag-salary">💰 {{ selectedJob.salary }}</span>
         </div>
         <div v-if="selectedJob.summary" class="modal-desc" v-html="highlightSummary(selectedJob.summary)"></div>
@@ -1536,10 +1461,6 @@ body { background: var(--canvas); }
   background: rgba(47, 111, 237, 0.1);
   color: var(--brand);
   text-transform: capitalize;
-}
-.meta-tag-easy {
-  background: var(--accent-soft);
-  color: var(--accent);
 }
 .meta-tag-salary {
   background: rgba(18, 168, 148, 0.12);

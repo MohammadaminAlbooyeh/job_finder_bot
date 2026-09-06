@@ -5,7 +5,7 @@ from main import run_all
 
 def test_run_all_integration(tmp_path, monkeypatch):
     # mock scraper to return deterministic data
-    def mock_linkedin(query, location, num_pages, job_type=None, date_posted=None, experience_level=None):
+    def mock_linkedin(query, location, num_pages, date_posted=None, experience_level=None):
         return [{"source": "linkedin", "title": "L1", "company": "X", "location": "Remote", "url": "u1", "summary": "s1"}]
 
     # patch the function that `main` actually calls (it is imported there)

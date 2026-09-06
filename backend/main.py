@@ -61,12 +61,11 @@ def _save_history(history):
         json.dump(history[-HISTORY_LIMIT:], f, ensure_ascii=False, indent=2)
 
 
-def _record_run(query, location, job_type, date_posted, experience_level, total, new_count, triggered_by):
+def _record_run(query, location, date_posted, experience_level, total, new_count, triggered_by):
     entry = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "query": query,
         "location": location,
-        "job_type": job_type,
         "date_posted": date_posted,
         "experience_level": experience_level,
         "total": total,
@@ -128,7 +127,6 @@ def run_jobs(
     query: str = "python developer",
     location: str = "remote",
     num_pages: int = 1,
-    job_type: str = "",
     date_posted: str = "",
     experience_level: str = "",
     include_keywords: str = "",
@@ -138,7 +136,6 @@ def run_jobs(
         "query": query,
         "location": location,
         "num_pages": num_pages,
-        "job_type": job_type or None,
         "date_posted": date_posted or None,
         "experience_level": experience_level or None,
         "include_keywords": include_keywords or None,
@@ -148,7 +145,6 @@ def run_jobs(
         query=query,
         location=location,
         num_pages=num_pages,
-        job_type=job_type or None,
         date_posted=date_posted or None,
         experience_level=experience_level or None,
         include_keywords=[k.strip() for k in include_keywords.split(",") if k.strip()] or None,
@@ -197,7 +193,7 @@ def download_html():
 @app.post("/export")
 async def export_jobs(request: Request):
     """Persist an already-merged list of jobs (e.g. combined across several
-    job-type/location filters on the frontend) as the CSV/HTML download files,
+    location/title filters on the frontend) as the CSV/HTML download files,
     so downloads always match exactly what's shown on screen."""
     body = await request.json()
     jobs = body if isinstance(body, list) else body.get("jobs", [])
@@ -220,7 +216,6 @@ def run_all(
     location_whitelist=None,
     enable_email=False,
     enable_telegram=False,
-    job_type=None,
     date_posted=None,
     experience_level=None,
     triggered_by="manual",
@@ -231,7 +226,6 @@ def run_all(
             query=query,
             location=location,
             num_pages=num_pages,
-            job_type=job_type,
             date_posted=date_posted,
             experience_level=experience_level,
         )
@@ -315,7 +309,6 @@ def run_all(
     _record_run(
         query=query,
         location=location,
-        job_type=job_type,
         date_posted=date_posted,
         experience_level=experience_level,
         total=len(filtered_jobs),
@@ -337,7 +330,6 @@ def scheduled_run(triggered_by="scheduler"):
         query=params.get("query", os.getenv("JOB_QUERY", "python developer")),
         location=params.get("location", os.getenv("JOB_LOCATION", "remote")),
         num_pages=params.get("num_pages", int(os.getenv("JOB_PAGES", "1"))),
-        job_type=params.get("job_type"),
         date_posted=params.get("date_posted"),
         experience_level=params.get("experience_level"),
         include_keywords=[k.strip() for k in include_keywords.split(",") if k.strip()] if include_keywords else None,
@@ -358,7 +350,6 @@ if __name__ == "__main__":
         location_whitelist=os.getenv("LOCATION_WHITELIST", "").split(",") if os.getenv("LOCATION_WHITELIST") else None,
         enable_email=os.getenv("ENABLE_EMAIL", "false").lower() in ("true", "1", "yes"),
         enable_telegram=os.getenv("ENABLE_TELEGRAM", "false").lower() in ("true", "1", "yes"),
-        job_type=os.getenv("JOB_TYPE") or None,
         date_posted=os.getenv("DATE_POSTED") or None,
         experience_level=os.getenv("EXPERIENCE_LEVEL") or None,
         triggered_by="cli",

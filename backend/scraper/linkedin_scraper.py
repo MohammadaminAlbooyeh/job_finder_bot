@@ -130,14 +130,6 @@ def _get_soup(url: str, max_retries: int = 3, proxies: dict | None = None):
     raise RuntimeError(f"Unable to fetch page after {max_retries} retries: {url}")
 
 
-# LinkedIn's "workplace type" filter values (f_WT).
-JOB_TYPE_CODES = {
-    "onsite": "1",
-    "on-site": "1",
-    "remote": "2",
-    "hybrid": "3",
-}
-
 # LinkedIn's "date posted" filter values (f_TPR), in seconds.
 DATE_POSTED_CODES = {
     "24h": "r86400",
@@ -164,7 +156,6 @@ def scrape_linkedin(
     location: str = "remote",
     num_pages: int = 1,
     proxies: dict | None = None,
-    job_type: str | None = None,
     date_posted: str | None = None,
     experience_level: str | None = None,
 ):
@@ -172,19 +163,19 @@ def scrape_linkedin(
 
     - Supports optional `proxies` dict or `HTTP_PROXY`/`HTTPS_PROXY` env vars.
     - Uses rotating user agents, backoff and simple CAPTCHA detection.
-    - `job_type`: one of "remote", "hybrid", "onsite" (maps to LinkedIn's f_WT filter).
     - `date_posted`: one of "24h", "3d", "week" (maps to LinkedIn's f_TPR filter).
     - `experience_level`: one of "internship", "entry", "associate", "mid-senior",
       "director", "executive" (maps to LinkedIn's f_E filter).
+
+    Note: LinkedIn's f_WT (workplace type / remote-hybrid-onsite) filter is silently
+    ignored on the public, unauthenticated pages this scraper uses, so it isn't
+    exposed here — offering it would just be a filter that quietly does nothing.
     """
     jobs = []
     query_encoded = urllib.parse.quote_plus(query)
     location_encoded = urllib.parse.quote_plus(location)
 
     extra_params = ""
-    wt_code = JOB_TYPE_CODES.get((job_type or "").strip().lower())
-    if wt_code:
-        extra_params += f"&f_WT={wt_code}"
     tpr_code = DATE_POSTED_CODES.get((date_posted or "").strip().lower())
     if tpr_code:
         extra_params += f"&f_TPR={tpr_code}"
@@ -233,10 +224,7 @@ def scrape_linkedin(
             if date_el:
                 posted_date = date_el.get("datetime") or date_el.get_text(strip=True)
 
-            # Best-effort detection: LinkedIn cards mention "Easy Apply" in their
-            # text when the job supports one-click applying through LinkedIn itself.
             card_text = card.get_text(" ", strip=True)
-            easy_apply = "easy apply" in card_text.lower()
 
             salary_el = card.select_one("span.job-search-card__salary-info")
             if salary_el:
@@ -262,9 +250,7 @@ def scrape_linkedin(
                     "url": url_job,
                     "summary": summary,
                     "posted_date": posted_date,
-                    "job_type": job_type or "",
                     "experience_level": experience_level or "",
-                    "easy_apply": easy_apply,
                     "salary": salary,
                 }
             )
