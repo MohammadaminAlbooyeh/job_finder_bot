@@ -1,8 +1,57 @@
 import csv
+import html
 import sqlite3
 from typing import Dict, List
 import json
 import os
+
+
+def save_to_html(jobs: List[Dict], path: str):
+    """Write a standalone HTML report with clickable 'Apply' links for each job."""
+    rows = []
+    for job in jobs:
+        title = html.escape(job.get("title", ""))
+        company = html.escape(job.get("company", ""))
+        location = html.escape(job.get("location", ""))
+        job_type = html.escape(job.get("job_type", ""))
+        posted_date = html.escape(job.get("posted_date", ""))
+        url = html.escape(job.get("url", ""), quote=True)
+        apply_cell = f'<a class="apply" href="{url}" target="_blank" rel="noopener">Apply</a>' if url else ""
+        rows.append(
+            f"<tr><td>{title}</td><td>{company}</td><td>{location}</td>"
+            f"<td>{job_type}</td><td>{posted_date}</td><td>{apply_cell}</td></tr>"
+        )
+
+    table_rows = "\n".join(rows) if rows else '<tr><td colspan="6">No jobs found.</td></tr>'
+
+    doc = f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Job Finder Results</title>
+<style>
+  body {{ font-family: -apple-system, Segoe UI, Arial, sans-serif; background: #f4f6f9; color: #16202a; margin: 2rem; }}
+  h1 {{ font-size: 1.3rem; }}
+  table {{ width: 100%; border-collapse: collapse; background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }}
+  th, td {{ text-align: left; padding: 0.6rem 0.9rem; border-bottom: 1px solid #e4e9ee; font-size: 0.9rem; }}
+  th {{ background: #f4f6f9; }}
+  a.apply {{ display: inline-block; padding: 0.35rem 0.9rem; background: #2f6fed; color: #fff; border-radius: 6px; text-decoration: none; font-weight: 600; }}
+  a.apply:hover {{ background: #1f4fc4; }}
+</style>
+</head>
+<body>
+<h1>Job Finder Results ({len(jobs)} jobs)</h1>
+<table>
+<thead><tr><th>Title</th><th>Company</th><th>Location</th><th>Job Type</th><th>Posted</th><th>Link</th></tr></thead>
+<tbody>
+{table_rows}
+</tbody>
+</table>
+</body>
+</html>
+"""
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(doc)
 
 
 def save_to_csv(jobs: List[Dict], path: str):

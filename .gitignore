@@ -6,5 +6,6 @@ __pycache__/
 out_*.json
 jobs_output.json
 jobs_output.csv
+jobs_output.html
 run_history.json
 *.db

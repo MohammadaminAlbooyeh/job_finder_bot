@@ -7,7 +7,7 @@ from scraper.linkedin_scraper import scrape_linkedin
 from filters.job_filter import dedupe_jobs, filter_jobs, load_rules
 from notifier.email_sender import notify_jobs_via_email
 from notifier.telegram_sender import notify_jobs_via_telegram
-from persistence import save_to_csv, save_to_sqlite, detect_new_jobs
+from persistence import save_to_csv, save_to_html, save_to_sqlite, detect_new_jobs
 from cv_parser import extract_text, analyze_cv
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -184,6 +184,16 @@ def download_csv():
     return FileResponse(csv_path, media_type="text/csv", filename="jobs_output.csv")
 
 
+@app.get("/download/html")
+def download_html():
+    from fastapi.responses import FileResponse
+
+    html_path = os.getenv("PERSISTENCE_HTML_PATH", "jobs_output.html")
+    if not os.path.exists(html_path):
+        return JSONResponse(content={"error": "No HTML report yet. Run a search first."}, status_code=404)
+    return FileResponse(html_path, media_type="text/html", filename="jobs_output.html")
+
+
 def run_all(
     query: str = "python developer",
     location: str = "remote",
@@ -252,10 +262,14 @@ def run_all(
 
     print(f"Saved {output_path} (new_only={new_only}, new_count={len(new_jobs)})")
 
-    # Always persist results to CSV so a downloadable file is available after every run.
+    # Always persist results to CSV and a clickable HTML report after every run.
     csv_path = os.getenv("PERSISTENCE_CSV_PATH", "jobs_output.csv")
     save_to_csv(filtered_jobs, csv_path)
     print(f"Saved CSV to {csv_path}")
+
+    html_path = os.getenv("PERSISTENCE_HTML_PATH", "jobs_output.html")
+    save_to_html(filtered_jobs, html_path)
+    print(f"Saved HTML report to {html_path}")
 
     persistence = os.getenv("PERSISTENCE", "none").lower()
     if persistence == "sqlite":

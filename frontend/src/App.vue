@@ -645,6 +645,10 @@ onUnmounted(() => {
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 19h16"/></svg>
           Download CSV
         </a>
+        <a class="download-link" style="margin-top: 0.6rem;" :href="`${getApiBaseUrl()}/download/html`" target="_blank" rel="noopener">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 19h16"/></svg>
+          Download HTML (clickable links)
+        </a>
       </aside>
 
       <!-- Main Section -->
