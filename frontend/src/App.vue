@@ -16,7 +16,7 @@ const selectedExperienceLevels = ref([])
 const datePosted = ref('')
 const includeKeywords = ref('')
 const excludeKeywords = ref('')
-const sortBy = ref('relevance')
+const sortBy = ref('newest')
 const numPages = ref(1)
 const selectedTitles = ref([])
 const recentSearches = ref([])
@@ -323,6 +323,35 @@ function clearFilters() {
   showToast('Filters cleared', 'success')
 }
 
+// LinkedIn cards give us either an ISO date ("2026-09-06") or, less often, a
+// relative phrase ("3 hours ago", "2 days ago"). Turn either into a timestamp
+// so jobs can be ordered by actual publish time, most recent first.
+function jobTimestamp(job) {
+  const raw = (job.posted_date || '').trim()
+  if (!raw) return 0
+
+  if (/^\d{4}-\d{2}-\d{2}/.test(raw)) {
+    const parsed = Date.parse(raw)
+    if (!Number.isNaN(parsed)) return parsed
+  }
+
+  const match = raw.toLowerCase().match(/(\d+)\s*(minute|hour|day|week|month|year)s?\s*ago/)
+  if (match) {
+    const amount = parseInt(match[1], 10)
+    const unitMs = {
+      minute: 60 * 1000,
+      hour: 60 * 60 * 1000,
+      day: 24 * 60 * 60 * 1000,
+      week: 7 * 24 * 60 * 60 * 1000,
+      month: 30 * 24 * 60 * 60 * 1000,
+      year: 365 * 24 * 60 * 60 * 1000,
+    }[match[2]]
+    return Date.now() - amount * unitMs
+  }
+
+  return 0
+}
+
 const sortedJobs = computed(() => {
   const list = [...jobs.value]
 
@@ -330,7 +359,7 @@ const sortedJobs = computed(() => {
     return list.sort((a, b) => (a.title || '').localeCompare(b.title || ''))
   }
   if (sortBy.value === 'newest') {
-    return list.sort((a, b) => (b.is_new === a.is_new) ? 0 : (b.is_new ? 1 : -1))
+    return list.sort((a, b) => jobTimestamp(b) - jobTimestamp(a))
   }
   return list
 })
@@ -734,7 +763,7 @@ onUnmounted(() => {
           </button>
           <select v-if="activeTab === 'results'" v-model="sortBy" class="sort-select">
             <option value="relevance">Sort: Relevance</option>
-            <option value="newest">Sort: New first</option>
+            <option value="newest">Sort: Newest posted first</option>
             <option value="title">Sort: Title A-Z</option>
           </select>
         </div>
