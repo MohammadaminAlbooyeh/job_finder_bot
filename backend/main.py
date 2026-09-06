@@ -11,7 +11,7 @@ from persistence import save_to_csv, save_to_html, save_to_sqlite, detect_new_jo
 from cv_parser import extract_text, analyze_cv
 
 from apscheduler.schedulers.background import BackgroundScheduler
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -192,6 +192,23 @@ def download_html():
     if not os.path.exists(html_path):
         return JSONResponse(content={"error": "No HTML report yet. Run a search first."}, status_code=404)
     return FileResponse(html_path, media_type="text/html", filename="jobs_output.html")
+
+
+@app.post("/export")
+async def export_jobs(request: Request):
+    """Persist an already-merged list of jobs (e.g. combined across several
+    job-type/location filters on the frontend) as the CSV/HTML download files,
+    so downloads always match exactly what's shown on screen."""
+    body = await request.json()
+    jobs = body if isinstance(body, list) else body.get("jobs", [])
+    if not isinstance(jobs, list):
+        return JSONResponse(content={"error": "Expected a list of jobs."}, status_code=400)
+
+    csv_path = os.getenv("PERSISTENCE_CSV_PATH", "jobs_output.csv")
+    html_path = os.getenv("PERSISTENCE_HTML_PATH", "jobs_output.html")
+    save_to_csv(jobs, csv_path)
+    save_to_html(jobs, html_path)
+    return {"status": "ok", "count": len(jobs)}
 
 
 def run_all(

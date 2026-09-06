@@ -255,6 +255,18 @@ function maybeNotifyNewJobs(newCount, query) {
   }
 }
 
+async function exportResultsToBackend(list) {
+  try {
+    await fetch(`${getApiBaseUrl()}/export`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(list),
+    })
+  } catch {
+    // download files just won't reflect this merge — non-fatal
+  }
+}
+
 async function searchJobs() {
   loading.value = true
   error.value = ''
@@ -284,6 +296,7 @@ async function searchJobs() {
     const newCount = deduped.filter(j => j.is_new).length
     maybeNotifyNewJobs(newCount, queries[0])
     fetchStatus()
+    exportResultsToBackend(deduped)
   } catch (e) {
     const rawMessage = e?.message || 'Error fetching jobs'
     const normalizedMessage = rawMessage.toLowerCase()
@@ -306,7 +319,9 @@ async function loadMore() {
 
     numPages.value += 1
     const merged = await fetchJobsForLocations(apiUrl, queries, locations, numPages.value)
-    jobs.value = dedupeJobs([...jobs.value, ...merged])
+    const combined = dedupeJobs([...jobs.value, ...merged])
+    jobs.value = combined
+    exportResultsToBackend(combined)
     showToast(`Loaded page ${numPages.value}`, 'success')
   } catch (e) {
     showToast(e?.message || 'Could not load more jobs', 'error')
