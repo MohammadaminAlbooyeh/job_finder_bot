@@ -54,6 +54,7 @@ const selectedJob = ref(null)
 
 // Demo country/city and job title lists, can be replaced with API
 const countryList = [
+  'Europe', 'Asia', 'North America', 'South America', 'Africa', 'Oceania',
   'Italy', 'Remote', 'United States', 'United Kingdom', 'Germany', 'France', 'Spain', 'Netherlands', 'Switzerland', 'Portugal', 'Ireland', 'Sweden', 'Canada', 'United Arab Emirates', 'India', 'Poland', 'Austria', 'Belgium', 'Turkey', 'Greece'
 ]
 const cityList = [
