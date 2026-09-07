@@ -185,8 +185,9 @@ async def set_schedule_config(request: Request):
             continue
         title = (p.get("title") or "").strip()
         location = (p.get("location") or "remote").strip()
+        date_posted = (p.get("date_posted") or "").strip() or None
         if title:
-            pairs.append({"title": title, "location": location})
+            pairs.append({"title": title, "location": location, "date_posted": date_posted})
 
     if not pairs:
         return JSONResponse(content={"error": "Provide at least one (title, location) pair."}, status_code=400)
@@ -452,6 +453,7 @@ def scheduled_run(triggered_by="scheduler"):
                     query=title,
                     location=loc,
                     num_pages=int(os.getenv("JOB_PAGES", "1")),
+                    date_posted=pair.get("date_posted"),
                     enable_email=os.getenv("ENABLE_EMAIL", "false").lower() in ("true", "1", "yes"),
                     enable_telegram=os.getenv("ENABLE_TELEGRAM", "false").lower() in ("true", "1", "yes"),
                     triggered_by=triggered_by,

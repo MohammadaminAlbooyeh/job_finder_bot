@@ -44,7 +44,15 @@ const runningNow = ref(false)
 const historyList = ref([])
 const historyLoading = ref(false)
 
-const schedulePairs = ref([]) // [{ title, location }] — each pair gets its own separate CSV/HTML file
+const schedulePairs = ref([]) // [{ title, location, date_posted }] — each pair gets its own separate CSV/HTML file
+const scheduleDatePosted = ref('')
+const dateOptions = [
+  { value: '', label: 'Anytime' },
+  { value: '24h', label: 'Past 24 hours' },
+  { value: '3d', label: 'Past 3 days' },
+  { value: 'week', label: 'Past 7 days' },
+  { value: 'month', label: 'Past month' },
+]
 const scheduleTitleInput = ref('')
 const scheduleLocationInput = ref('')
 const savingSchedule = ref(false)
@@ -595,13 +603,15 @@ function addSchedulePair() {
     showToast('Type a job title first', 'error')
     return
   }
-  if (schedulePairs.value.some(p => p.title === title && p.location === location)) {
-    showToast('That title/location pair is already in the list', 'error')
+  const datePosted = scheduleDatePosted.value
+  if (schedulePairs.value.some(p => p.title === title && p.location === location && p.date_posted === datePosted)) {
+    showToast('That title/location/date pair is already in the list', 'error')
     return
   }
-  schedulePairs.value.push({ title, location })
+  schedulePairs.value.push({ title, location, date_posted: datePosted })
   scheduleTitleInput.value = ''
   scheduleLocationInput.value = ''
+  scheduleDatePosted.value = ''
   showScheduleTitleSuggestions.value = false
   showScheduleLocationSuggestions.value = false
 }
@@ -746,6 +756,7 @@ onUnmounted(() => {
             <option value="24h">Last 24 hours</option>
             <option value="3d">Last 3 days</option>
             <option value="week">Last 7 days</option>
+            <option value="month">Last month</option>
           </select>
         </div>
         <div class="filter-group">
@@ -844,12 +855,18 @@ onUnmounted(() => {
                 </li>
               </ul>
             </div>
+            <select v-model="scheduleDatePosted" class="schedule-date-select">
+              <option v-for="opt in dateOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+            </select>
             <button class="btn-secondary" @click="addSchedulePair">Add pair</button>
           </div>
 
           <div v-if="schedulePairs.length" class="pair-list">
-            <div v-for="(pair, idx) in schedulePairs" :key="`${pair.title}__${pair.location}`" class="pair-row">
-              <span class="pair-label">{{ pair.title }} <span class="pair-arrow">→</span> {{ pair.location }}</span>
+            <div v-for="(pair, idx) in schedulePairs" :key="`${pair.title}__${pair.location}__${pair.date_posted}`" class="pair-row">
+              <span class="pair-label">
+                {{ pair.title }} <span class="pair-arrow">→</span> {{ pair.location }}
+                <span v-if="pair.date_posted" class="meta-tag meta-tag-accent">{{ dateOptions.find(o => o.value === pair.date_posted)?.label }}</span>
+              </span>
               <div class="pair-actions">
                 <a :href="pairDownloadUrl(pair, 'html')" target="_blank" rel="noopener" class="btn-secondary btn-sm">HTML</a>
                 <a :href="pairDownloadUrl(pair, 'csv')" target="_blank" rel="noopener" class="btn-secondary btn-sm">CSV</a>
@@ -1438,6 +1455,15 @@ body { background: var(--canvas); }
   outline: none;
   border-color: var(--brand);
   box-shadow: 0 0 0 3px rgba(47, 111, 237, 0.12);
+}
+.schedule-date-select {
+  padding: 0.6rem 0.9rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 0.9rem;
+  background: var(--surface);
+  color: var(--ink);
 }
 .file-input {
   flex: 1;

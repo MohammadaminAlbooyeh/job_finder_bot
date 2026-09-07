@@ -138,6 +138,9 @@ DATE_POSTED_CODES = {
     "3days": "r259200",
     "week": "r604800",
     "7d": "r604800",
+    "month": "r2592000",
+    "30d": "r2592000",
+    "1month": "r2592000",
 }
 
 # LinkedIn's "experience level" filter values (f_E).
