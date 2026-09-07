@@ -1,13 +1,50 @@
 import csv
 import html
+import re
 import sqlite3
+from datetime import datetime, timezone
 from typing import Dict, List
 import json
 import os
 
 
+def _job_timestamp(job: Dict) -> float:
+    raw = (job.get("posted_date") or "").strip()
+    if not raw:
+        return 0.0
+
+    if re.match(r"^\d{4}-\d{2}-\d{2}", raw):
+        try:
+            parsed = datetime.fromisoformat(raw[:10])
+            return parsed.replace(tzinfo=timezone.utc).timestamp()
+        except Exception:
+            pass
+
+    m = re.search(r"(\d+)\s*(minute|hour|day|week|month|year)s?\s*ago", raw, re.IGNORECASE)
+    if m:
+        value = int(m.group(1))
+        unit = m.group(2).lower()
+        now = datetime.now(timezone.utc)
+        if unit.startswith("minute"):
+            return now.timestamp() - value * 60
+        if unit.startswith("hour"):
+            return now.timestamp() - value * 3600
+        if unit.startswith("day"):
+            return now.timestamp() - value * 86400
+        if unit.startswith("week"):
+            return now.timestamp() - value * 604800
+        if unit.startswith("month"):
+            return now.timestamp() - value * 2592000
+        if unit.startswith("year"):
+            return now.timestamp() - value * 31536000
+
+    return 0.0
+
+
 def save_to_html(jobs: List[Dict], path: str):
-    """Write a standalone HTML report with clickable 'Apply' links for each job."""
+    """Write a standalone HTML report with clickable 'Apply' links for each job.
+    Jobs are sorted by posted_date, newest first."""
+    jobs = sorted(jobs, key=_job_timestamp, reverse=True)
     rows = []
     for job in jobs:
         title = html.escape(job.get("title", ""))
