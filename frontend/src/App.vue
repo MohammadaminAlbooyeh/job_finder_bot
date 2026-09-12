@@ -39,23 +39,8 @@ let toastId = 0
 
 const theme = ref('light')
 
-const scanStatus = ref(null)
-const runningNow = ref(false)
 const historyList = ref([])
 const historyLoading = ref(false)
-
-const schedulePairs = ref([]) // [{ title, location, date_posted }] — each pair gets its own separate CSV/HTML file
-const scheduleDatePosted = ref('')
-const dateOptions = [
-  { value: '', label: 'Anytime' },
-  { value: '24h', label: 'Past 24 hours' },
-  { value: '3d', label: 'Past 3 days' },
-  { value: 'week', label: 'Past 7 days' },
-  { value: 'month', label: 'Past month' },
-]
-const scheduleTitleInput = ref('')
-const scheduleLocationInput = ref('')
-const savingSchedule = ref(false)
 
 const selectedJob = ref(null)
 
@@ -75,10 +60,6 @@ const citySuggestions = ref([])
 const showCitySuggestions = ref(false)
 const jobTitleSuggestions = ref([])
 const showJobTitleSuggestions = ref(false)
-const scheduleTitleSuggestions = ref([])
-const showScheduleTitleSuggestions = ref(false)
-const scheduleLocationSuggestions = ref([])
-const showScheduleLocationSuggestions = ref(false)
 
 function updateCitySuggestions() {
   const val = searchLocation.value.trim().toLowerCase()
@@ -295,7 +276,6 @@ async function searchJobs() {
     recordRecentSearch(queries[0], locations[0])
     const newCount = deduped.filter(j => j.is_new).length
     maybeNotifyNewJobs(newCount, queries[0])
-    fetchStatus()
     exportResultsToBackend(sortedJobs.value)
   } catch (e) {
     const rawMessage = e?.message || 'Error fetching jobs'
@@ -524,16 +504,6 @@ function toggleTheme() {
   applyTheme()
 }
 
-// --- Auto-scan status & history ---
-async function fetchStatus() {
-  try {
-    const res = await fetch(`${getApiBaseUrl()}/status`)
-    if (res.ok) scanStatus.value = await res.json()
-  } catch {
-    // backend unreachable — leave previous status as-is
-  }
-}
-
 async function fetchHistory() {
   historyLoading.value = true
   try {
@@ -543,119 +513,6 @@ async function fetchHistory() {
     showToast('Could not load scan history', 'error')
   } finally {
     historyLoading.value = false
-  }
-}
-
-async function runNow() {
-  runningNow.value = true
-  try {
-    const res = await fetch(`${getApiBaseUrl()}/run-now`, { method: 'POST' })
-    if (!res.ok) throw new Error(`API error: ${res.status}`)
-    const data = await res.json()
-    jobs.value = dedupeJobs(Array.isArray(data) ? data : [])
-    activeTab.value = 'results'
-    showToast('Scan triggered — results updated', 'success')
-    fetchStatus()
-  } catch (e) {
-    showToast(e?.message || 'Could not trigger scan', 'error')
-  } finally {
-    runningNow.value = false
-  }
-}
-
-// --- Auto-scan schedule config: strict (title, location) pairs, each its own file ---
-function updateScheduleTitleSuggestions() {
-  const val = scheduleTitleInput.value.trim().toLowerCase()
-  if (!val) {
-    scheduleTitleSuggestions.value = []
-    showScheduleTitleSuggestions.value = false
-    return
-  }
-  scheduleTitleSuggestions.value = jobTitleList.filter(title => title.toLowerCase().startsWith(val)).slice(0, 6)
-  showScheduleTitleSuggestions.value = scheduleTitleSuggestions.value.length > 0
-}
-
-function selectScheduleTitleSuggestion(title) {
-  scheduleTitleInput.value = title
-  showScheduleTitleSuggestions.value = false
-}
-
-function updateScheduleLocationSuggestions() {
-  const val = scheduleLocationInput.value.trim().toLowerCase()
-  if (!val) {
-    scheduleLocationSuggestions.value = []
-    showScheduleLocationSuggestions.value = false
-    return
-  }
-  scheduleLocationSuggestions.value = locationList.filter(loc => loc.toLowerCase().startsWith(val)).slice(0, 6)
-  showScheduleLocationSuggestions.value = scheduleLocationSuggestions.value.length > 0
-}
-
-function selectScheduleLocationSuggestion(loc) {
-  scheduleLocationInput.value = loc
-  showScheduleLocationSuggestions.value = false
-}
-
-function addSchedulePair() {
-  const title = scheduleTitleInput.value.trim()
-  const location = scheduleLocationInput.value.trim() || 'remote'
-  if (!title) {
-    showToast('Type a job title first', 'error')
-    return
-  }
-  const datePosted = scheduleDatePosted.value
-  if (schedulePairs.value.some(p => p.title === title && p.location === location && p.date_posted === datePosted)) {
-    showToast('That title/location/date pair is already in the list', 'error')
-    return
-  }
-  schedulePairs.value.push({ title, location, date_posted: datePosted })
-  scheduleTitleInput.value = ''
-  scheduleLocationInput.value = ''
-  scheduleDatePosted.value = ''
-  showScheduleTitleSuggestions.value = false
-  showScheduleLocationSuggestions.value = false
-}
-
-function removeSchedulePair(index) {
-  schedulePairs.value.splice(index, 1)
-}
-
-function pairDownloadUrl(pair, kind) {
-  const params = new URLSearchParams({ title: pair.title, location: pair.location })
-  return `${getApiBaseUrl()}/download/pair-${kind}?${params.toString()}`
-}
-
-async function fetchScheduleConfig() {
-  try {
-    const res = await fetch(`${getApiBaseUrl()}/schedule-config`)
-    if (res.ok) {
-      const data = await res.json()
-      schedulePairs.value = data.pairs || []
-    }
-  } catch {
-    // backend unreachable — leave form empty
-  }
-}
-
-async function saveScheduleConfig() {
-  if (schedulePairs.value.length === 0) {
-    showToast('Add at least one title/location pair first', 'error')
-    return
-  }
-  savingSchedule.value = true
-  try {
-    const res = await fetch(`${getApiBaseUrl()}/schedule-config`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pairs: schedulePairs.value }),
-    })
-    if (!res.ok) throw new Error(`API error: ${res.status}`)
-    showToast('Auto-scan will keep searching each pair separately every run', 'success')
-    fetchStatus()
-  } catch (e) {
-    showToast(e?.message || 'Could not save schedule', 'error')
-  } finally {
-    savingSchedule.value = false
   }
 }
 
@@ -686,13 +543,6 @@ onMounted(() => {
   } catch {
     recentSearches.value = []
   }
-  fetchStatus()
-  fetchScheduleConfig()
-  statusTimer = setInterval(fetchStatus, 60000)
-})
-
-onUnmounted(() => {
-  if (statusTimer) clearInterval(statusTimer)
 })
 </script>
 
@@ -716,14 +566,6 @@ onUnmounted(() => {
           </div>
         </div>
         <div class="header-actions">
-          <div class="scan-badge" :title="scanStatus?.next_run_at ? `Next scan: ${formatTime(scanStatus.next_run_at)}` : ''">
-            <span class="dot"></span>
-            <span>{{ scanStatus?.interval_hours ? `Auto-scan every ${scanStatus.interval_hours}h` : 'Auto-scan' }}</span>
-          </div>
-          <button class="btn-secondary btn-sm" @click="runNow" :disabled="runningNow">
-            <span v-if="runningNow" class="spinner spinner-dark"></span>
-            {{ runningNow ? 'Running…' : 'Run Now' }}
-          </button>
           <button class="icon-btn" @click="toggleTheme" :title="theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'">
             {{ theme === 'dark' ? '☀️' : '🌙' }}
           </button>
@@ -805,81 +647,6 @@ onUnmounted(() => {
               <span v-for="skill in cvAnalysis.matched_skills" :key="skill" class="skill-tag">{{ skill }}</span>
             </div>
             <div class="cv-hint">Pick a location and job type below, then click Search.</div>
-          </div>
-        </section>
-
-        <!-- Auto-scan schedule config -->
-        <section class="cv-box">
-          <div class="cv-box-header">
-            <h3>Auto-scan title/location pairs</h3>
-            <p class="cv-box-subtitle">
-              Pair a job title with one location and add it. The auto-scan (every {{ scanStatus?.interval_hours || 2 }}h)
-              searches each pair strictly on its own — never combined with the others — and writes each one to its own
-              separate CSV/HTML file, until you save a different list here.
-            </p>
-          </div>
-          <div class="cv-row">
-            <div class="search-field">
-              <input
-                v-model="scheduleTitleInput"
-                type="text"
-                placeholder="Job title (e.g. python developer)"
-                @keyup.enter="addSchedulePair"
-                @input="updateScheduleTitleSuggestions"
-                @focus="updateScheduleTitleSuggestions"
-                @blur="setTimeout(() => showScheduleTitleSuggestions = false, 120)"
-                autocomplete="off"
-                class="schedule-title-input"
-              />
-              <ul v-if="showScheduleTitleSuggestions" class="suggestions">
-                <li v-for="title in scheduleTitleSuggestions" :key="title" @mousedown.prevent="selectScheduleTitleSuggestion(title)">
-                  {{ title }}
-                </li>
-              </ul>
-            </div>
-            <div class="search-field">
-              <input
-                v-model="scheduleLocationInput"
-                type="text"
-                placeholder="Location (e.g. Italy, Europe)"
-                @keyup.enter="addSchedulePair"
-                @input="updateScheduleLocationSuggestions"
-                @focus="updateScheduleLocationSuggestions"
-                @blur="setTimeout(() => showScheduleLocationSuggestions = false, 120)"
-                autocomplete="off"
-                class="schedule-title-input"
-              />
-              <ul v-if="showScheduleLocationSuggestions" class="suggestions">
-                <li v-for="loc in scheduleLocationSuggestions" :key="loc" @mousedown.prevent="selectScheduleLocationSuggestion(loc)">
-                  {{ loc }}
-                </li>
-              </ul>
-            </div>
-            <select v-model="scheduleDatePosted" class="schedule-date-select">
-              <option v-for="opt in dateOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
-            </select>
-            <button class="btn-secondary" @click="addSchedulePair">Add pair</button>
-          </div>
-
-          <div v-if="schedulePairs.length" class="pair-list">
-            <div v-for="(pair, idx) in schedulePairs" :key="`${pair.title}__${pair.location}__${pair.date_posted}`" class="pair-row">
-              <span class="pair-label">
-                {{ pair.title }} <span class="pair-arrow">→</span> {{ pair.location }}
-                <span v-if="pair.date_posted" class="meta-tag meta-tag-accent">{{ dateOptions.find(o => o.value === pair.date_posted)?.label }}</span>
-              </span>
-              <div class="pair-actions">
-                <a :href="pairDownloadUrl(pair, 'html')" target="_blank" rel="noopener" class="btn-secondary btn-sm">HTML</a>
-                <a :href="pairDownloadUrl(pair, 'csv')" target="_blank" rel="noopener" class="btn-secondary btn-sm">CSV</a>
-                <button class="remove-tag" @click="removeSchedulePair(idx)">&times;</button>
-              </div>
-            </div>
-          </div>
-
-          <div class="cv-row" style="margin-top: 0.8rem;">
-            <button class="btn-primary" @click="saveScheduleConfig" :disabled="savingSchedule">
-              <span v-if="savingSchedule" class="spinner"></span>
-              {{ savingSchedule ? 'Saving…' : 'Save schedule' }}
-            </button>
           </div>
         </section>
 
@@ -1044,7 +811,7 @@ onUnmounted(() => {
           <div v-if="historyLoading" class="empty-state"><p>Loading history…</p></div>
           <div v-else-if="historyList.length === 0" class="empty-state">
             <div class="empty-icon">🕓</div>
-            <p>No scans recorded yet — run a search or wait for the next auto-scan.</p>
+            <p>No scans recorded yet — run a search to see history here.</p>
           </div>
           <table v-else class="history-table">
             <thead>
@@ -1222,24 +989,6 @@ body { background: var(--canvas); }
   display: flex;
   align-items: center;
   gap: 0.7rem;
-}
-.scan-badge {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.4rem 0.9rem;
-  border-radius: 999px;
-  background: var(--accent-soft);
-  color: var(--accent);
-  font-size: 0.82rem;
-  font-weight: 600;
-}
-.scan-badge .dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--accent);
-  box-shadow: 0 0 0 3px rgba(18, 168, 148, 0.18);
 }
 .icon-btn {
   border: 1px solid var(--line);
@@ -1440,31 +1189,6 @@ body { background: var(--canvas); }
   align-items: center;
   flex-wrap: wrap;
 }
-.schedule-title-input {
-  flex: 1;
-  min-width: 220px;
-  padding: 0.6rem 0.9rem;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  font-family: inherit;
-  font-size: 0.9rem;
-  background: var(--surface);
-  color: var(--ink);
-}
-.schedule-title-input:focus {
-  outline: none;
-  border-color: var(--brand);
-  box-shadow: 0 0 0 3px rgba(47, 111, 237, 0.12);
-}
-.schedule-date-select {
-  padding: 0.6rem 0.9rem;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  font-family: inherit;
-  font-size: 0.9rem;
-  background: var(--surface);
-  color: var(--ink);
-}
 .file-input {
   flex: 1;
   min-width: 220px;
@@ -1562,37 +1286,6 @@ body { background: var(--canvas); }
   flex-wrap: wrap;
   gap: 0.4rem;
   margin-top: 0.8rem;
-}
-.pair-list {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  margin-top: 0.8rem;
-}
-.pair-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.8rem;
-  padding: 0.5rem 0.8rem;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--canvas);
-  flex-wrap: wrap;
-}
-.pair-label {
-  font-size: 0.88rem;
-  font-weight: 600;
-  color: var(--ink);
-}
-.pair-arrow {
-  color: var(--ink-soft);
-  font-weight: 400;
-}
-.pair-actions {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
 }
 .location-tag {
   background: var(--accent-soft);
